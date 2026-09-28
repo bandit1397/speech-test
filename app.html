@@ -1,0 +1,238 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>경찰 실시간 통역 V6</title>
+<link rel="preconnect" href="https://generativelanguage.googleapis.com" crossorigin>
+<link rel="preconnect" href="https://police-live-translate-default-rtdb.asia-southeast1.firebasedatabase.app" crossorigin>
+<link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+<style>
+body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;background:#f4f5f7;margin:0;color:#111}
+main{max-width:720px;margin:auto;padding:14px 16px 40px}
+.card{background:#fff;border-radius:14px;padding:14px;margin:10px 0}
+details.card>summary{font-weight:800;cursor:pointer}
+input,select,button{width:100%;box-sizing:border-box;padding:14px;margin:5px 0;border-radius:10px;font-size:1rem}
+input,select{border:1px solid #ccc;background:#fff}
+button{border:0;font-weight:800;background:#e8e8ea;color:#111}
+.roles,.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.active{background:#111;color:#fff}
+.label{font-size:.82rem;color:#666;margin-top:6px}
+.status{font-weight:800}.ok{color:#087a2f}.bad{color:#b00020}
+#recv{font-size:1.75rem;line-height:1.4;font-weight:700;min-height:2.8em;overflow-wrap:anywhere}
+#recv.flash{animation:fl 1s}@keyframes fl{from{background:#fff3b0}to{background:#fff}}
+#talk{height:26vh;min-height:140px;font-size:1.5rem;background:#111;color:#fff;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+#talk.on{background:#c62828}#talk.busy{background:#666}
+#talk:disabled{background:#bbb}
+#mine{font-size:1.05rem;color:#444;overflow-wrap:anywhere}#mineTr{font-size:.95rem;color:#777;overflow-wrap:anywhere}
+#tstat{font-weight:700;text-align:center;min-height:1.4em}
+.m{background:#f2f2f3;padding:9px;border-radius:9px;font-size:.8rem;color:#555}.m b{display:block;font-size:1.05rem;color:#111}
+#hist div{padding:7px 0;border-bottom:1px solid #eee;overflow-wrap:anywhere}#hist .me{color:#555}#hist .peer{font-weight:700}
+.log{white-space:pre-wrap;font-size:.82rem;color:#555;line-height:1.5}
+.note{font-size:.85rem;background:#fff4d5;padding:10px;border-radius:10px;line-height:1.5}
+</style></head><body><main>
+
+<details id="setup" class="card" open>
+ <summary>⚙️ 설정 (키 · 방 · 역할)</summary>
+ <div class="label">Gemini API Key (저장하지 않음)</div>
+ <input id="key" type="password" autocomplete="off" placeholder="API 키 입력">
+ <select id="model">
+  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (기본)</option>
+  <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (예비)</option>
+ </select>
+ <button id="test">API 연결 테스트</button><b id="api">API 미확인</b>
+ <div class="label">방 코드 (두 폰이 같아야 함)</div>
+ <input id="room" value="test-room" autocomplete="off">
+ <div class="label">이 휴대폰 역할</div>
+ <div class="roles"><button id="roleA">👮 경찰 A<br><small>한국어</small></button><button id="roleB">🌍 외국인 B<br><small>Foreigner</small></button></div>
+ <div id="langBox" hidden>
+  <div class="label">외국인 언어 / Language</div>
+  <select id="lang">
+   <option value="en">🇺🇸 English</option><option value="zh">🇨🇳 中文</option><option value="ja">🇯🇵 日本語</option>
+   <option value="vi">🇻🇳 Tiếng Việt</option><option value="es">🇪🇸 Español</option>
+  </select>
+ </div>
+ <div class="label">Firebase</div><div id="conn" class="status">연결 준비 중…</div>
+ <p class="note">무료 등급 연습용입니다. 실제 이름·주소·사건 정보는 입력하지 마세요.</p>
+</details>
+
+<div class="card">
+ <div class="label" id="partnerLabel">상대방 (번역됨)</div>
+ <div id="recv">…</div>
+</div>
+
+<button id="talk" disabled>역할을 먼저 선택하세요</button>
+<div id="tstat"></div>
+
+<div class="card">
+ <div class="label" id="mineLabel">내가 한 말</div>
+ <div id="mine">…</div><div id="mineTr"></div>
+</div>
+
+<div class="card grid">
+ <div class="m">음성인식 (뗀 후)<b id="mStt">-</b></div>
+ <div class="m">번역 (Gemini)<b id="mTr">-</b></div>
+ <div class="m">Firebase 전송<b id="mFb">-</b></div>
+ <div class="m">수신 지연<b id="mRx">-</b></div>
+</div>
+
+<details class="card"><summary id="histLabel">대화 기록</summary><div id="hist"></div></details>
+<details class="card"><summary>기술 로그</summary><div id="log" class="log">페이지 시작</div></details>
+
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import{getDatabase,ref,set,onValue}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+
+const config={apiKey:"AIzaSyCOZdr6afg-XFdAy1aNxtp5WTFOqwjv4v0",authDomain:"police-live-translate.firebaseapp.com",databaseURL:"https://police-live-translate-default-rtdb.asia-southeast1.firebasedatabase.app/",projectId:"police-live-translate",storageBucket:"police-live-translate.firebasestorage.app",messagingSenderId:"713741196450",appId:"1:713741196450:web:4e93fadf6ff85a3020cbfb"};
+
+const LANGS={
+ ko:{en:"Korean",sr:"ko-KR",cjk:false},
+ en:{en:"English",sr:"en-US",cjk:false},
+ zh:{en:"Simplified Chinese",sr:"zh-CN",cjk:true},
+ ja:{en:"Japanese",sr:"ja-JP",cjk:true},
+ vi:{en:"Vietnamese",sr:"vi-VN",cjk:false},
+ es:{en:"Spanish",sr:"es-ES",cjk:false}};
+const UI={
+ ko:{talk:"🎤 누르고 말하기",listening:"🔴 듣는 중… (떼면 전송)",tapStop:"🔴 듣는 중… (다시 누르면 전송)",translating:"번역 중…",sent:"✅ 전송됨",partner:"외국인 (번역됨)",mine:"내가 한 말",noSpeech:"음성이 인식되지 않았습니다",err:"오류",quota:"요청 한도 초과 — 잠시 후 다시",history:"대화 기록"},
+ en:{talk:"🎤 Hold to speak",listening:"🔴 Listening… (release to send)",tapStop:"🔴 Listening… (tap again to send)",translating:"Translating…",sent:"✅ Sent",partner:"Police officer (translated)",mine:"What you said",noSpeech:"No speech detected",err:"Error",quota:"Too many requests — try again shortly",history:"Conversation"},
+ zh:{talk:"🎤 按住说话",listening:"🔴 正在听…（松开发送）",tapStop:"🔴 正在听…（再按一次发送）",translating:"翻译中…",sent:"✅ 已发送",partner:"警察（已翻译）",mine:"您说的话",noSpeech:"未识别到语音",err:"错误",quota:"请求过多，请稍后再试",history:"对话记录"},
+ ja:{talk:"🎤 押しながら話す",listening:"🔴 聞いています…（離すと送信）",tapStop:"🔴 聞いています…（もう一度押すと送信）",translating:"翻訳中…",sent:"✅ 送信しました",partner:"警察官（翻訳）",mine:"あなたの発言",noSpeech:"音声が認識されませんでした",err:"エラー",quota:"リクエストが多すぎます。少し待ってください",history:"会話履歴"},
+ vi:{talk:"🎤 Nhấn giữ để nói",listening:"🔴 Đang nghe… (thả ra để gửi)",tapStop:"🔴 Đang nghe… (nhấn lần nữa để gửi)",translating:"Đang dịch…",sent:"✅ Đã gửi",partner:"Cảnh sát (đã dịch)",mine:"Bạn đã nói",noSpeech:"Không nhận diện được giọng nói",err:"Lỗi",quota:"Quá nhiều yêu cầu — vui lòng thử lại sau",history:"Lịch sử hội thoại"},
+ es:{talk:"🎤 Mantén pulsado para hablar",listening:"🔴 Escuchando… (suelta para enviar)",tapStop:"🔴 Escuchando… (pulsa otra vez para enviar)",translating:"Traduciendo…",sent:"✅ Enviado",partner:"Policía (traducido)",mine:"Lo que dijiste",noSpeech:"No se detectó voz",err:"Error",quota:"Demasiadas solicitudes — inténtalo en un momento",history:"Conversación"}};
+
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const $=x=>document.getElementById(x);
+const tm=()=>new Date().toLocaleTimeString("ko-KR",{hour12:false});
+const lg=s=>{$("log").textContent+="\n"+tm()+" : "+s};
+const sec=ms=>(ms/1000).toFixed(2)+"초";
+
+let db=null,role="",bLang="en",room="",offset=0,unsubs=[],lastId=null;
+const myLang=()=>role==="A"?"ko":bLang, peerLang=()=>role==="A"?bLang:"ko";
+const ui=()=>UI[role==="B"?bLang:"ko"];
+
+// ---------- Firebase ----------
+try{
+ db=getDatabase(initializeApp(config));
+ onValue(ref(db,".info/connected"),s=>{const c=!!s.val();$("conn").textContent=c?"✅ Firebase 연결됨":"⏳ 연결 대기";$("conn").className="status "+(c?"ok":"")});
+ onValue(ref(db,".info/serverTimeOffset"),s=>{offset=s.val()||0});
+}catch(e){$("conn").textContent="❌ 초기화 실패";$("conn").className="status bad";lg("Firebase 초기화 오류 → "+e.message)}
+
+function listen(){
+ unsubs.forEach(u=>u());unsubs=[];lastId=null;
+ if(!db||!role)return;
+ room=($("room").value.trim().replace(/[^A-Za-z0-9_-]/g,"")||"test-room");$("room").value=room;
+ const base="rooms/"+room+"/";
+ let first=true;
+ unsubs.push(onValue(ref(db,base+(role==="A"?"BtoA":"AtoB")),s=>{
+  const v=s.val();
+  if(first){first=false;lastId=v?.id??null;return} // 이전에 남아 있던 메시지는 표시하지 않음
+  if(!v||v.id===lastId)return;lastId=v.id;
+  $("recv").textContent=v.text;$("recv").classList.remove("flash");void $("recv").offsetWidth;$("recv").classList.add("flash");
+  const d=Date.now()+offset-v.sentMs;$("mRx").textContent=(d>=0&&d<60000)?d+" ms":"-";
+  navigator.vibrate?.(60);addHist("peer",v.text);lg("수신 ← "+v.text+" ("+d+" ms)");
+ },e=>lg("수신 오류 → "+e.message)));
+ unsubs.push(onValue(ref(db,base+"meta"),s=>{
+  const l=s.val()?.bLang;
+  if(role==="A"&&l&&LANGS[l]&&l!==bLang){bLang=l;lg("외국인 언어 → "+LANGS[l].en)}
+  if(role==="A")$("partnerLabel").textContent=UI.ko.partner+" · "+LANGS[bLang].en+" ⇄ Korean";
+ }));
+ lg("방 "+room+" 역할 "+role+" 수신 시작");
+}
+function publishLang(){if(db&&role==="B")set(ref(db,"rooms/"+room+"/meta"),{bLang}).catch(e=>lg("언어 저장 오류 → "+e.message))}
+
+// ---------- 역할 / 화면 언어 ----------
+function applyUI(){
+ const u=ui();document.documentElement.lang=myLang();
+ $("partnerLabel").textContent=u.partner+(role==="A"?" · "+LANGS[bLang].en+" ⇄ Korean":"");
+ $("mineLabel").textContent=u.mine;$("histLabel").textContent=u.history;
+ if(!listening){$("talk").textContent=u.talk;$("talk").disabled=!SR}
+}
+function choose(r){
+ role=r;$("roleA").classList.toggle("active",r==="A");$("roleB").classList.toggle("active",r==="B");
+ $("langBox").hidden=r!=="B";
+ listen();publishLang();applyUI();keepAwake();
+ if($("key").value.trim())$("setup").open=false;
+}
+$("roleA").onclick=()=>choose("A");$("roleB").onclick=()=>choose("B");
+$("lang").onchange=()=>{bLang=$("lang").value;publishLang();applyUI()};
+$("room").onchange=()=>{if(role){listen();publishLang()}};
+
+// ---------- 화면 꺼짐 방지 ----------
+async function keepAwake(){try{if("wakeLock"in navigator&&document.visibilityState==="visible")await navigator.wakeLock.request("screen")}catch(e){}}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&role)keepAwake()});
+
+// ---------- Gemini 번역 ----------
+function getout(d){return(d?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim().replace(/^["'“”「」]+|["'“”「」]+$/g,"")}
+async function gemini(sys,text,maxTok){
+ const model=$("model").value,key=$("key").value.trim();
+ const gc={temperature:0,maxOutputTokens:maxTok,thinkingConfig:model.startsWith("gemini-2.5")?{thinkingBudget:0}:{thinkingLevel:"minimal"}};
+ const body={contents:[{role:"user",parts:[{text}]}],generationConfig:gc};
+ if(sys)body.systemInstruction={parts:[{text:sys}]};
+ const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body)});
+ if(r.status===429){const e=new Error("429 요청 한도 초과");e.quota=true;throw e}
+ if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,300));
+ return getout(await r.json());
+}
+const translate=(text,src,tgt)=>gemini(
+ `You interpret face to face between a Korean police officer and a foreign national. Translate the user's text from ${LANGS[src].en} into natural, concise ${LANGS[tgt].en}. The text comes from speech recognition and may contain recognition errors; convey the intended meaning. Output only the ${LANGS[tgt].en} translation.`,
+ text,256);
+
+$("test").onclick=async()=>{
+ if(!$("key").value.trim()){$("api").textContent="키를 입력하세요";return}
+ $("api").className="";$("api").textContent="확인 중…";const st=performance.now();
+ try{const out=await gemini("",`Translate to English. Output English only: 안녕하세요`,20);$("api").className="ok";$("api").textContent="✅ "+out+" / "+sec(performance.now()-st)}
+ catch(e){$("api").className="bad";$("api").textContent="❌ "+(e.quota?"요청 한도 초과":"연결 실패");lg("API 테스트 오류 → "+e.message)}
+};
+
+// ---------- 전송 ----------
+async function send(text,sttMs){
+ const src=myLang(),tgt=peerLang(),u=ui();
+ $("mStt").textContent=sttMs!=null?sec(sttMs):"-";
+ $("tstat").textContent=u.translating;$("talk").classList.add("busy");
+ const t1=performance.now();let out;
+ try{out=await translate(text,src,tgt)}
+ catch(e){$("tstat").textContent="❌ "+(e.quota?u.quota:u.err);$("talk").classList.remove("busy");lg("번역 오류 → "+e.message);return}
+ const trMs=performance.now()-t1;$("mTr").textContent=sec(trMs);$("mineTr").textContent="→ "+out;
+ if(!out){$("tstat").textContent="❌ "+u.err;$("talk").classList.remove("busy");lg("번역 결과 없음");return}
+ const t2=performance.now();
+ try{
+  await set(ref(db,"rooms/"+room+"/"+(role==="A"?"AtoB":"BtoA")),{id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),text:out,src,tgt,sentMs:Date.now()+offset});
+  $("mFb").textContent=sec(performance.now()-t2);$("tstat").textContent=u.sent;
+  addHist("me",text+"  →  "+out);lg("송신 → "+out+" (번역 "+sec(trMs)+")");
+ }catch(e){$("tstat").textContent="❌ "+u.err;lg("송신 오류 → "+e.message)}
+ $("talk").classList.remove("busy");
+}
+function addHist(who,t){const d=document.createElement("div");d.className=who;d.textContent=(who==="me"?"🗣 ":"💬 ")+t;$("hist").prepend(d);while($("hist").children.length>40)$("hist").lastChild.remove()}
+
+// ---------- 누르고 말하기 ----------
+// 길게 누르면: 떼는 순간 전송 / 짧게 톡 누르면: 다시 누를 때 전송
+let rec=null,listening=false,stopping=false,pressT=0,toggleMode=false,tRelease=0;
+function combine(results,cjk){
+ // Android Chrome은 누적 결과를 중복으로 주는 경우가 있어 앞부분이 같으면 교체
+ let out="";
+ for(const r of results){const t=(r[0]?.transcript||"").trim();if(!t)continue;
+  if(!out||t.startsWith(out))out=t;else if(!out.endsWith(t))out+=(cjk?"":" ")+t}
+ return out;
+}
+function startListen(){
+ if(listening||!role)return;
+ if(!$("key").value.trim()){$("setup").open=true;$("api").className="bad";$("api").textContent="API 키부터 입력하세요";return}
+ const lang=myLang(),u=ui();let text="";
+ rec=new SR();rec.lang=LANGS[lang].sr;rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=1;
+ listening=true;stopping=false;tRelease=0;
+ $("talk").classList.add("on");$("talk").textContent=u.listening;$("tstat").textContent="";$("mine").textContent="…";$("mineTr").textContent="";
+ rec.onresult=e=>{text=combine(e.results,LANGS[lang].cjk);$("mine").textContent=text||"…"};
+ rec.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요"};
+ rec.onend=()=>{
+  listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
+  const t=text.trim();if(!t){$("tstat").textContent=u.noSpeech;return}
+  send(t,tRelease?performance.now()-tRelease:null);
+ };
+ try{rec.start()}catch(e){listening=false;$("talk").classList.remove("on");lg("STT 시작 오류 → "+e.message)}
+}
+function stopListen(){if(!listening||stopping)return;stopping=true;tRelease=performance.now();try{rec.stop()}catch(e){}}
+const talk=$("talk");
+talk.addEventListener("pointerdown",e=>{e.preventDefault();if(listening){stopListen();return}pressT=performance.now();toggleMode=false;startListen()});
+talk.addEventListener("pointerup",()=>{if(!listening||stopping)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopListen()});
+talk.addEventListener("pointercancel",()=>{if(listening&&!toggleMode)stopListen()});
+talk.addEventListener("contextmenu",e=>e.preventDefault());
+
+if(!SR){$("talk").textContent="이 브라우저는 음성인식 미지원 (Chrome 사용)";lg("Web Speech API 미지원")}
+</script></main></body></html>
