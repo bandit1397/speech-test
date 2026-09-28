@@ -1,0 +1,25 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>두 폰 통신 V5</title>
+<style>body{font-family:system-ui,sans-serif;background:#f4f5f7;margin:0;color:#111}main{max-width:720px;margin:auto;padding:18px}.card{background:#fff;border-radius:14px;padding:16px;margin:12px 0}.roles,.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}button,input{width:100%;box-sizing:border-box;padding:15px;margin:5px 0;border-radius:10px;font-size:1rem}button{border:0;font-weight:800}.role{background:#e8e8ea}.active,.send{background:#111;color:#fff}.label{font-size:.85rem;color:#666}.big{font-size:1.4rem;min-height:45px;overflow-wrap:anywhere}.status{font-weight:800}.ok{color:#087a2f}.bad{color:#b00020}.m{background:#f2f2f3;padding:10px;border-radius:9px}.m b{display:block}.log{white-space:pre-wrap;font-size:.87rem;color:#555;line-height:1.55}.note{font-size:.9rem;background:#fff4d5;padding:12px;border-radius:10px;line-height:1.5}</style></head><body><main>
+<h2>📱↔📱 두 폰 통신 테스트 V5</h2><p>A/B 두 폰에서 같은 페이지를 열고 서로 다른 역할을 선택합니다.</p>
+<div class="card"><div class="label">Firebase 상태</div><div id="conn" class="status">연결 준비 중…</div></div>
+<div class="card"><div class="label">이 휴대폰 역할</div><div class="roles"><button id="a" class="role">👮 경찰 A</button><button id="b" class="role">🌍 외국인 B</button></div><b id="role">역할을 선택하세요.</b></div>
+<div class="card"><div class="label">보낼 테스트 문장</div><input id="msg" value="테스트 메시지입니다."><button id="send" class="send">상대 폰으로 보내기</button></div>
+<div class="card"><div class="label">상대 폰에서 받은 메시지</div><div id="recv" class="big">아직 받은 메시지가 없습니다.</div></div>
+<div class="card grid"><div class="m">마지막 송신<b id="sent">-</b></div><div class="m">수신 지연*<b id="delay">-</b></div></div>
+<div class="card"><div class="label">기록</div><div id="log" class="log">페이지 시작</div></div>
+<div class="note">* 두 폰의 시계 차이가 있어 지연값은 참고용입니다. 테스트 모드에서는 실제 개인정보·사건정보를 입력하지 마세요.</div>
+<script type="module">
+import{initializeApp}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
+import{getDatabase,ref,set,onValue}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+const config={apiKey:"AIzaSyCOZdr6afg-XFdAy1aNxtp5WTFOqwjv4v0",authDomain:"police-live-translate.firebaseapp.com",databaseURL:"https://police-live-translate-default-rtdb.asia-southeast1.firebasedatabase.app/",projectId:"police-live-translate",storageBucket:"police-live-translate.firebasestorage.app",messagingSenderId:"713741196450",appId:"1:713741196450:web:4e93fadf6ff85a3020cbfb"};
+const $=x=>document.getElementById(x);let role="",unsub=null,last="";
+const tm=()=>new Date().toLocaleTimeString("ko-KR",{hour12:false});function lg(s){$("log").textContent+="\n"+tm()+" : "+s}
+try{
+ const db=getDatabase(initializeApp(config));
+ onValue(ref(db,".info/connected"),s=>{if(s.val()){ $("conn").textContent="✅ Firebase 연결됨";$("conn").className="status ok";}else{$("conn").textContent="⏳ 연결 대기";}});
+ function choose(r){role=r;$("a").classList.toggle("active",r==="A");$("b").classList.toggle("active",r==="B");$("role").textContent=r==="A"?"👮 이 폰 = 경찰 A":"🌍 이 폰 = 외국인 B";$("msg").value=r+"폰 테스트 메시지입니다.";lg("역할 "+r+" 선택");listen()}
+ function listen(){if(unsub)unsub();const path=role==="A"?"BtoA":"AtoB";unsub=onValue(ref(db,"rooms/test-room/"+path),s=>{const v=s.val();if(!v||v.id===last)return;last=v.id;$("recv").textContent=v.text;const d=Date.now()-v.sentMs;$("delay").textContent=(d>=0&&d<60000)?d+" ms":"시계 차이";lg("수신 ← "+v.text)})}
+ $("a").onclick=()=>choose("A");$("b").onclick=()=>choose("B");
+ $("send").onclick=async()=>{if(!role){alert("먼저 역할을 선택하세요.");return}const text=$("msg").value.trim();if(!text)return;const path=role==="A"?"AtoB":"BtoA";try{await set(ref(db,"rooms/test-room/"+path),{id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),text,from:role,sentMs:Date.now()});$("sent").textContent=tm();lg("송신 → "+text)}catch(e){lg("송신 오류 → "+e.message);alert(e.message)}};
+}catch(e){$("conn").textContent="❌ 초기화 실패";$("conn").className="status bad";lg("초기화 오류 → "+e.message)}
+</script></main></body></html>
