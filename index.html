@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Galaxy 실시간 한국어 음성인식 테스트</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;background:#f5f5f5;color:#111}
+  main{max-width:720px;margin:auto;padding:24px}
+  h1{font-size:1.45rem;margin-bottom:8px}
+  .sub{color:#555;line-height:1.5}
+  button{width:100%;font-size:1.35rem;padding:18px;border:0;border-radius:14px;margin:12px 0;cursor:pointer}
+  #start{background:#111;color:white}
+  #stop{background:#ddd;color:#111}
+  .status{font-weight:700;margin:12px 0}
+  .box{background:white;border-radius:14px;padding:18px;margin-top:14px;min-height:90px;box-shadow:0 1px 5px #0001}
+  .label{font-size:.85rem;color:#666;margin-bottom:8px}
+  #interim{font-size:1.65rem;line-height:1.45;color:#444}
+  #final{font-size:1.65rem;line-height:1.45;font-weight:700}
+  #log{font-size:.9rem;white-space:pre-wrap;color:#555}
+  .warn{background:#fff4d6;padding:12px;border-radius:10px;line-height:1.45}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎤 실시간 한국어 음성인식 테스트</h1>
+  <div class="sub">목표: 말을 끝내기 전에 글자가 나타나는지 확인합니다. 번역·TTS·API 키는 사용하지 않습니다.</div>
+
+  <button id="start">🎤 시작</button>
+  <button id="stop" disabled>■ 중지</button>
+  <div id="status" class="status">대기 중</div>
+
+  <div class="box">
+    <div class="label">말하는 도중 — 중간 결과</div>
+    <div id="interim">…</div>
+  </div>
+
+  <div class="box">
+    <div class="label">확정된 문장</div>
+    <div id="final">…</div>
+  </div>
+
+  <div class="box">
+    <div class="label">시간 기록</div>
+    <div id="log">시작 버튼을 누른 뒤 말해 보세요.</div>
+  </div>
+
+  <p class="warn">
+    권장 시험 문장:<br>
+    ① 어디가 다쳤습니까?<br>
+    ② 사고가 어떻게 발생했습니까?<br>
+    ③ 상대 차량 번호를 기억하십니까?
+  </p>
+</main>
+
+<script>
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const statusEl = document.getElementById('status');
+const interimEl = document.getElementById('interim');
+const finalEl = document.getElementById('final');
+const logEl = document.getElementById('log');
+
+let recognition, t0, firstInterim = false;
+
+function stamp() {
+  return t0 ? ((performance.now()-t0)/1000).toFixed(2) + '초' : '';
+}
+function addLog(s) {
+  logEl.textContent += '\n' + s;
+}
+
+if (!SR) {
+  statusEl.textContent = '이 브라우저에서는 Web Speech 음성인식을 사용할 수 없습니다.';
+  startBtn.disabled = true;
+} else {
+  recognition = new SR();
+  recognition.lang = 'ko-KR';
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    t0 = performance.now();
+    firstInterim = false;
+    statusEl.textContent = '🟢 듣는 중 — 지금 말하세요';
+    interimEl.textContent = '듣고 있습니다…';
+    logEl.textContent = '0.00초 : 음성인식 시작';
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+  };
+
+  recognition.onresult = (event) => {
+    let interim = '';
+    let finalText = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const txt = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalText += txt;
+      else interim += txt;
+    }
+
+    if (interim) {
+      interimEl.textContent = interim;
+      if (!firstInterim) {
+        firstInterim = true;
+        addLog(stamp() + ' : 첫 중간 결과 → ' + interim);
+      }
+    }
+    if (finalText) {
+      finalEl.textContent = (finalEl.textContent === '…' ? '' : finalEl.textContent + ' ') + finalText;
+      addLog(stamp() + ' : 확정 → ' + finalText);
+    }
+  };
+
+  recognition.onspeechstart = () => addLog(stamp() + ' : 말하기 감지');
+  recognition.onspeechend = () => addLog(stamp() + ' : 말하기 종료 감지');
+
+  recognition.onerror = (e) => {
+    statusEl.textContent = '오류: ' + e.error;
+    addLog(stamp() + ' : 오류 → ' + e.error);
+  };
+
+  recognition.onend = () => {
+    statusEl.textContent = '중지됨';
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  };
+
+  startBtn.onclick = () => {
+    finalEl.textContent = '…';
+    interimEl.textContent = '…';
+    try { recognition.start(); } catch(e) {}
+  };
+
+  stopBtn.onclick = () => recognition.stop();
+}
+</script>
+</body>
+</html>
