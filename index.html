@@ -1,140 +1,39 @@
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Galaxy 실시간 한국어 음성인식 테스트</title>
-<style>
-  body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;margin:0;background:#f5f5f5;color:#111}
-  main{max-width:720px;margin:auto;padding:24px}
-  h1{font-size:1.45rem;margin-bottom:8px}
-  .sub{color:#555;line-height:1.5}
-  button{width:100%;font-size:1.35rem;padding:18px;border:0;border-radius:14px;margin:12px 0;cursor:pointer}
-  #start{background:#111;color:white}
-  #stop{background:#ddd;color:#111}
-  .status{font-weight:700;margin:12px 0}
-  .box{background:white;border-radius:14px;padding:18px;margin-top:14px;min-height:90px;box-shadow:0 1px 5px #0001}
-  .label{font-size:.85rem;color:#666;margin-bottom:8px}
-  #interim{font-size:1.65rem;line-height:1.45;color:#444}
-  #final{font-size:1.65rem;line-height:1.45;font-weight:700}
-  #log{font-size:.9rem;white-space:pre-wrap;color:#555}
-  .warn{background:#fff4d6;padding:12px;border-radius:10px;line-height:1.45}
-</style>
-</head>
-<body>
-<main>
-  <h1>🎤 실시간 한국어 음성인식 테스트</h1>
-  <div class="sub">목표: 말을 끝내기 전에 글자가 나타나는지 확인합니다. 번역·TTS·API 키는 사용하지 않습니다.</div>
-
-  <button id="start">🎤 시작</button>
-  <button id="stop" disabled>■ 중지</button>
-  <div id="status" class="status">대기 중</div>
-
-  <div class="box">
-    <div class="label">말하는 도중 — 중간 결과</div>
-    <div id="interim">…</div>
-  </div>
-
-  <div class="box">
-    <div class="label">확정된 문장</div>
-    <div id="final">…</div>
-  </div>
-
-  <div class="box">
-    <div class="label">시간 기록</div>
-    <div id="log">시작 버튼을 누른 뒤 말해 보세요.</div>
-  </div>
-
-  <p class="warn">
-    권장 시험 문장:<br>
-    ① 어디가 다쳤습니까?<br>
-    ② 사고가 어떻게 발생했습니까?<br>
-    ③ 상대 차량 번호를 기억하십니까?
-  </p>
-</main>
-
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>STT + Gemini 번역 테스트</title>
+<style>body{font-family:system-ui,sans-serif;background:#f5f5f5;margin:0;color:#111}main{max-width:760px;margin:auto;padding:20px}.card{background:#fff;padding:16px;border-radius:14px;margin:12px 0}input,button{box-sizing:border-box;width:100%;padding:15px;margin:6px 0;border-radius:10px;font-size:1rem}button{border:0;font-weight:700}#start{background:#111;color:#fff}.big{font-size:1.5rem;line-height:1.5;min-height:45px}.label{color:#666;font-size:.85rem}.log{white-space:pre-wrap;font-size:.88rem;color:#555}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}.m{background:#f2f2f2;padding:10px;border-radius:8px}.m b{display:block;font-size:1.2rem}</style></head><body><main>
+<h2>🎤 한국어 STT → Gemini 영어 번역</h2><p>말하는 도중 한국어 인식과 영어 번역의 지연시간을 측정합니다. 음성 출력은 없습니다.</p>
+<div class="card"><div class="label">Gemini API Key — 저장하지 않음</div><input id="key" type="password" autocomplete="off" placeholder="API 키 입력"><button id="test">API 연결 테스트</button><b id="api">API 미확인</b></div>
+<div class="card"><button id="start">🎤 실시간 번역 시작</button><button id="stop" disabled>■ 중지</button><b id="status">대기 중</b></div>
+<div class="card"><div class="label">한국어 음성인식</div><div id="ko" class="big">…</div></div>
+<div class="card"><div class="label">영어 번역</div><div id="en" class="big"><b>…</b></div></div>
+<div class="card metrics"><div class="m">첫 STT<b id="mstt">-</b></div><div class="m">Gemini API<b id="mapi">-</b></div><div class="m">첫 영어 표시<b id="mtotal">-</b></div><div class="m">번역 요청 수<b id="mcalls">0</b></div></div>
+<div class="card"><div class="label">시간 기록</div><div id="log" class="log">아직 시작하지 않았습니다.</div></div>
+<div class="card">시험 문장: <b>사고가 어떻게 발생했습니까?</b><br><small>※ 실험용입니다. 실제 배포에서는 브라우저에 장기 API 키를 두지 않습니다.</small></div>
 <script>
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const startBtn = document.getElementById('start');
-const stopBtn = document.getElementById('stop');
-const statusEl = document.getElementById('status');
-const interimEl = document.getElementById('interim');
-const finalEl = document.getElementById('final');
-const logEl = document.getElementById('log');
-
-let recognition, t0, firstInterim = false;
-
-function stamp() {
-  return t0 ? ((performance.now()-t0)/1000).toFixed(2) + '초' : '';
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition,$=x=>document.getElementById(x);
+const MODEL="gemini-3.7-flash"; let rec,t0=0,ts=0,first=false,firstEn=false,timer=null,ctrl=null,seq=0,calls=0,finalText="",last="";
+const elapsed=()=>t0?(performance.now()-t0)/1000:0, sinceSpeech=()=>ts?(performance.now()-ts)/1000:elapsed();
+function log(s){$("log").textContent+="\n"+elapsed().toFixed(2)+"초 : "+s}
+function output(d){return (d?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim().replace(/^["'“”]+|["'“”]+$/g,"")}
+async function translate(text){
+ if(!text||text===last)return; last=text; const key=$("key").value.trim(); if(!key)return;
+ if(ctrl)ctrl.abort(); ctrl=new AbortController(); const mine=++seq, started=performance.now(); calls++; $("mcalls").textContent=calls; log("번역 요청 → "+text);
+ try{
+  const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+MODEL+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},signal:ctrl.signal,body:JSON.stringify({
+   systemInstruction:{parts:[{text:"Translate Korean police field conversation into natural concise English. Output only the English translation, no explanation."}]},
+   contents:[{parts:[{text}]}],generationConfig:{temperature:0,maxOutputTokens:60,thinkingConfig:{thinkingBudget:0}}
+  })});
+  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,250)); const d=await r.json(); if(mine!==seq)return; const out=output(d), sec=(performance.now()-started)/1000;
+  if(out){$("en").textContent=out;$("mapi").textContent=sec.toFixed(2)+"초";log("영어 도착 ("+sec.toFixed(2)+"초) → "+out);if(!firstEn){firstEn=true;$("mtotal").textContent=sinceSpeech().toFixed(2)+"초"}}
+ }catch(e){if(e.name!=="AbortError")log("API 오류 → "+e.message)}
 }
-function addLog(s) {
-  logEl.textContent += '\n' + s;
+function schedule(t){clearTimeout(timer);timer=setTimeout(()=>translate(t),400)}
+$("test").onclick=async()=>{const key=$("key").value.trim();if(!key){$("api").textContent="키를 입력하세요";return}$("api").textContent="확인 중…";try{const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+MODEL+":generateContent",{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify({contents:[{parts:[{text:"Translate to English. Output only translation: 안녕하세요"}]}],generationConfig:{temperature:0,maxOutputTokens:20,thinkingConfig:{thinkingBudget:0}}})});if(!r.ok)throw new Error(await r.text());const d=await r.json();$("api").textContent="✅ 연결 성공: "+output(d)}catch(e){$("api").textContent="❌ 연결 실패";$("log").textContent=e.message}};
+if(!SR){$("status").textContent="Web Speech API 미지원";$("start").disabled=true}else{
+ rec=new SR();rec.lang="ko-KR";rec.continuous=true;rec.interimResults=true;
+ rec.onstart=()=>{t0=performance.now();ts=0;first=false;firstEn=false;finalText="";last="";seq=0;calls=0;$("mcalls").textContent="0";$("mstt").textContent=$("mapi").textContent=$("mtotal").textContent="-";$("ko").textContent="듣는 중…";$("en").textContent="…";$("log").textContent="0.00초 : 음성인식 시작";$("status").textContent="🟢 듣는 중";$("start").disabled=true;$("stop").disabled=false};
+ rec.onspeechstart=()=>{if(!ts)ts=performance.now();log("말하기 감지")};
+ rec.onresult=e=>{let inter="",nf="";for(let i=e.resultIndex;i<e.results.length;i++){let x=e.results[i][0].transcript.trim();if(e.results[i].isFinal)nf+=(nf?" ":"")+x;else inter+=(inter?" ":"")+x}if(nf)finalText+=(finalText?" ":"")+nf;let cur=(finalText+(inter?" "+inter:"")).trim();if(cur){$("ko").textContent=cur;if(!first){first=true;$("mstt").textContent=sinceSpeech().toFixed(2)+"초";log("첫 STT → "+cur)}else log((inter?"중간":"확정")+" STT → "+cur);schedule(cur)}};
+ rec.onspeechend=()=>log("말하기 종료 감지");rec.onerror=e=>log("STT 오류 → "+e.error);rec.onend=()=>{$("status").textContent="중지됨";$("start").disabled=false;$("stop").disabled=true};
+ $("start").onclick=()=>{if(!$("key").value.trim()){$("api").textContent="API 키부터 입력하세요";return}try{rec.start()}catch(e){}};$("stop").onclick=()=>{clearTimeout(timer);rec.stop()};
 }
-
-if (!SR) {
-  statusEl.textContent = '이 브라우저에서는 Web Speech 음성인식을 사용할 수 없습니다.';
-  startBtn.disabled = true;
-} else {
-  recognition = new SR();
-  recognition.lang = 'ko-KR';
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
-
-  recognition.onstart = () => {
-    t0 = performance.now();
-    firstInterim = false;
-    statusEl.textContent = '🟢 듣는 중 — 지금 말하세요';
-    interimEl.textContent = '듣고 있습니다…';
-    logEl.textContent = '0.00초 : 음성인식 시작';
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-  };
-
-  recognition.onresult = (event) => {
-    let interim = '';
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const txt = event.results[i][0].transcript;
-      if (event.results[i].isFinal) finalText += txt;
-      else interim += txt;
-    }
-
-    if (interim) {
-      interimEl.textContent = interim;
-      if (!firstInterim) {
-        firstInterim = true;
-        addLog(stamp() + ' : 첫 중간 결과 → ' + interim);
-      }
-    }
-    if (finalText) {
-      finalEl.textContent = (finalEl.textContent === '…' ? '' : finalEl.textContent + ' ') + finalText;
-      addLog(stamp() + ' : 확정 → ' + finalText);
-    }
-  };
-
-  recognition.onspeechstart = () => addLog(stamp() + ' : 말하기 감지');
-  recognition.onspeechend = () => addLog(stamp() + ' : 말하기 종료 감지');
-
-  recognition.onerror = (e) => {
-    statusEl.textContent = '오류: ' + e.error;
-    addLog(stamp() + ' : 오류 → ' + e.error);
-  };
-
-  recognition.onend = () => {
-    statusEl.textContent = '중지됨';
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-  };
-
-  startBtn.onclick = () => {
-    finalEl.textContent = '…';
-    interimEl.textContent = '…';
-    try { recognition.start(); } catch(e) {}
-  };
-
-  stopBtn.onclick = () => recognition.stop();
-}
-</script>
-</body>
-</html>
+</script></main></body></html>
