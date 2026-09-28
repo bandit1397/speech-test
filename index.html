@@ -1,121 +1,87 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>STT + Gemini 저지연 번역 V2</title>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>STT + Gemini 저지연 번역 V3</title>
 <style>
-body{font-family:system-ui,sans-serif;background:#f5f5f5;margin:0;color:#111}
-main{max-width:760px;margin:auto;padding:18px}.card{background:white;padding:16px;border-radius:14px;margin:12px 0}
-input,button{box-sizing:border-box;width:100%;padding:15px;margin:6px 0;border-radius:10px;font-size:1rem}
-button{border:0;font-weight:700}#start{background:#111;color:white}.big{font-size:1.5rem;line-height:1.45;min-height:45px}
-.label{font-size:.85rem;color:#666}.log{white-space:pre-wrap;font-size:.87rem;line-height:1.55;color:#555}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.m{background:#f2f2f2;padding:10px;border-radius:9px}.m b{display:block;font-size:1.2rem}
+body{font-family:system-ui,sans-serif;background:#f5f5f5;margin:0;color:#111}main{max-width:760px;margin:auto;padding:18px}
+.card{background:#fff;padding:16px;border-radius:14px;margin:12px 0}input,button{box-sizing:border-box;width:100%;padding:15px;margin:6px 0;border-radius:10px;font-size:1rem}
+button{border:0;font-weight:700}#start{background:#111;color:#fff}.big{font-size:1.5rem;line-height:1.45;min-height:45px}.label{font-size:.85rem;color:#666}
+.log{white-space:pre-wrap;font-size:.87rem;line-height:1.55;color:#555;overflow-wrap:anywhere}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.m{background:#f2f2f2;padding:10px;border-radius:9px}.m b{display:block;font-size:1.2rem}.ok{color:#087a2f}.err{color:#b00020}
 </style></head><body><main>
-<h2>⚡ 실시간 번역 속도 테스트 V2</h2>
-<p>Galaxy Chrome STT → Gemini 3.1 Flash-Lite → 영어 TEXT</p>
-
-<div class="card"><div class="label">Gemini API Key (저장하지 않음)</div>
-<input id="key" type="password" autocomplete="off" placeholder="API 키 입력">
+<h2>⚡ 실시간 번역 속도 테스트 V3</h2><p>Galaxy Chrome STT → Gemini 3.1 Flash-Lite → 영어 TEXT</p>
+<div class="card"><div class="label">Gemini API Key (페이지에 저장하지 않음)</div><input id="key" type="password" autocomplete="off" placeholder="API 키 입력">
 <button id="test">API 연결/속도 테스트</button><b id="api">API 미확인</b></div>
-
-<div class="card"><button id="start">🎤 실시간 번역 시작</button>
-<button id="stop" disabled>■ 중지</button><b id="status">대기 중</b></div>
-
+<div class="card"><button id="start">🎤 실시간 번역 시작</button><button id="stop" disabled>■ 중지</button><b id="status">대기 중</b></div>
 <div class="card"><div class="label">현재 한국어</div><div id="ko" class="big">…</div></div>
 <div class="card"><div class="label">현재 영어</div><div id="en" class="big"><b>…</b></div></div>
-
 <div class="card grid">
-<div class="m">첫 STT<b id="mstt">-</b></div>
-<div class="m">최근 API<b id="mapi">-</b></div>
-<div class="m">첫 영어 표시<b id="mtotal">-</b></div>
-<div class="m">완성문장 영어<b id="mfinal">-</b></div>
-<div class="m">요청 수<b id="mcalls">0</b></div>
-<div class="m">모델<b style="font-size:.85rem">3.1 Flash-Lite</b></div>
+<div class="m">첫 STT<b id="mstt">-</b></div><div class="m">최근 API<b id="mapi">-</b></div>
+<div class="m">첫 영어 표시<b id="mtotal">-</b></div><div class="m">완성문장 영어<b id="mfinal">-</b></div>
+<div class="m">요청 수<b id="mcalls">0</b></div><div class="m">모델<b style="font-size:.85rem">3.1 Flash-Lite</b></div>
 </div>
-
 <div class="card"><div class="label">시간 기록</div><div id="log" class="log">아직 시작하지 않았습니다.</div></div>
-<div class="card"><b>시험 문장:</b> 사고가 어떻게 발생했습니까?<br>
-<small>실제 개인정보·사건정보가 아닌 시험 문장으로 테스트하세요.</small></div>
-
+<div class="card"><b>시험 문장:</b> 사고가 어떻게 발생했습니까?<br><small>실제 개인정보·사건정보가 아닌 시험 문장으로 테스트하세요.</small></div>
 <script>
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition,$=id=>document.getElementById(id);
-const MODEL="gemini-3.1-flash-lite", WAIT=250;
+const MODEL="gemini-3.1-flash-lite",WAIT=250;
 let rec,t0=0,speechT=0,firstSTT=false,firstEN=false,timer=null,seq=0,calls=0,lastSent="",latest="",speechEnded=false;
-
 const elapsed=()=>t0?(performance.now()-t0)/1000:0;
 const fromSpeech=()=>speechT?(performance.now()-speechT)/1000:elapsed();
 function log(s){$("log").textContent+="\n"+elapsed().toFixed(2)+"초 : "+s}
-function out(d){return (d?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim().replace(/^["'“”]+|["'“”]+$/g,"")}
+function output(d){return(d?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim().replace(/^["'“”]+|["'“”]+$/g,"")}
+function cfg(tokens){return{temperature:0,maxOutputTokens:tokens,thinkingConfig:{thinkingLevel:"minimal"}}}
 
-async function requestTranslation(text,isFinal=false){
- const key=$("key").value.trim(); if(!key||!text||text===lastSent)return;
- lastSent=text; const my=++seq; calls++; $("mcalls").textContent=calls;
- const st=performance.now(); log((isFinal?"최종 ":"")+"번역 요청 → "+text);
+async function translate(text,isFinal=false){
+ const key=$("key").value.trim();if(!key||!text||text===lastSent)return;
+ lastSent=text;const my=++seq;calls++;$("mcalls").textContent=calls;const st=performance.now();
+ log((isFinal?"최종 ":"")+"번역 요청 → "+text);
  try{
   const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
    method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
    body:JSON.stringify({
     systemInstruction:{parts:[{text:"Translate Korean into concise natural English. Output English only."}]},
     contents:[{parts:[{text}]}],
-    generationConfig:{temperature:0,maxOutputTokens:40},
-    thinkingConfig:{thinkingLevel:"minimal"}
+    generationConfig:cfg(40)
    })
   });
-  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,250));
-  const d=await r.json(), sec=(performance.now()-st)/1000;
-  // Do not let an older response overwrite a newer request.
+  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,700));
+  const d=await r.json(),sec=(performance.now()-st)/1000;
   if(my<seq){log("이전 응답 무시 ("+sec.toFixed(2)+"초)");return}
-  const e=out(d); if(!e)return;
-  $("en").textContent=e;$("mapi").textContent=sec.toFixed(2)+"초";
-  log("영어 도착 ("+sec.toFixed(2)+"초) → "+e);
+  const e=output(d);if(!e){log("빈 번역 응답");return}
+  $("en").textContent=e;$("mapi").textContent=sec.toFixed(2)+"초";log("영어 도착 ("+sec.toFixed(2)+"초) → "+e);
   if(!firstEN){firstEN=true;$("mtotal").textContent=fromSpeech().toFixed(2)+"초"}
   if(isFinal||speechEnded)$("mfinal").textContent=fromSpeech().toFixed(2)+"초";
  }catch(e){log("API 오류 → "+e.message)}
 }
-function schedule(text){
- latest=text; clearTimeout(timer);
- timer=setTimeout(()=>requestTranslation(latest,false),WAIT);
-}
+function schedule(text){latest=text;clearTimeout(timer);timer=setTimeout(()=>translate(latest,false),WAIT)}
 
 $("test").onclick=async()=>{
  const key=$("key").value.trim();if(!key){$("api").textContent="키를 입력하세요";return}
- $("api").textContent="측정 중…";const st=performance.now();
+ $("api").className="";$("api").textContent="측정 중…";const st=performance.now();
  try{
   const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,{
    method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},
-   body:JSON.stringify({contents:[{parts:[{text:"Translate to English. Output English only: 안녕하세요"}]}],
-    generationConfig:{temperature:0,maxOutputTokens:20},thinkingConfig:{thinkingLevel:"minimal"}})
+   body:JSON.stringify({contents:[{parts:[{text:"Translate to English. Output English only: 안녕하세요"}]}],generationConfig:cfg(20)})
   });
-  if(!r.ok)throw new Error(await r.text());const d=await r.json();
-  $("api").textContent="✅ "+out(d)+" / "+((performance.now()-st)/1000).toFixed(2)+"초";
- }catch(e){$("api").textContent="❌ 실패";$("log").textContent=e.message}
+  if(!r.ok)throw new Error(r.status+" "+await r.text());
+  const d=await r.json();$("api").className="ok";$("api").textContent="✅ "+output(d)+" / "+((performance.now()-st)/1000).toFixed(2)+"초";
+ }catch(e){$("api").className="err";$("api").textContent="❌ 연결 실패";$("log").textContent="API 연결 오류:\n"+e.message}
 };
 
 if(!SR){$("status").textContent="Web Speech API 미지원";$("start").disabled=true}else{
  rec=new SR();rec.lang="ko-KR";rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=1;
- rec.onstart=()=>{
-  t0=performance.now();speechT=0;firstSTT=false;firstEN=false;lastSent="";latest="";seq=0;calls=0;speechEnded=false;
+ rec.onstart=()=>{t0=performance.now();speechT=0;firstSTT=false;firstEN=false;lastSent="";latest="";seq=0;calls=0;speechEnded=false;
   $("mcalls").textContent="0";["mstt","mapi","mtotal","mfinal"].forEach(x=>$(x).textContent="-");
-  $("ko").textContent="듣는 중…";$("en").textContent="…";$("log").textContent="0.00초 : 음성인식 시작";
-  $("status").textContent="🟢 듣는 중";$("start").disabled=true;$("stop").disabled=false;
- };
+  $("ko").textContent="듣는 중…";$("en").textContent="…";$("log").textContent="0.00초 : 음성인식 시작";$("status").textContent="🟢 듣는 중";$("start").disabled=true;$("stop").disabled=false};
  rec.onspeechstart=()=>{speechEnded=false;if(!speechT)speechT=performance.now();log("말하기 감지")};
  rec.onresult=e=>{
-   // Galaxy/Chrome test showed each final result can already contain the latest full hypothesis.
-   // Therefore display/use ONLY the newest result instead of appending previous finals.
-   const newest=e.results[e.results.length-1];
-   const text=(newest?.[0]?.transcript||"").trim();
-   if(!text)return;
-   $("ko").textContent=text;
-   const fin=!!newest.isFinal;
-   if(!firstSTT){firstSTT=true;$("mstt").textContent=fromSpeech().toFixed(2)+"초";log("첫 STT → "+text)}
-   else log((fin?"확정":"중간")+" STT → "+text);
-   schedule(text);
+  const newest=e.results[e.results.length-1],text=(newest?.[0]?.transcript||"").trim();if(!text)return;
+  $("ko").textContent=text;const fin=!!newest.isFinal;
+  if(!firstSTT){firstSTT=true;$("mstt").textContent=fromSpeech().toFixed(2)+"초";log("첫 STT → "+text)}
+  else log((fin?"확정":"중간")+" STT → "+text);
+  schedule(text);
  };
- rec.onspeechend=()=>{
-   speechEnded=true;log("말하기 종료 감지");
-   clearTimeout(timer);
-   if(latest && latest!==lastSent)setTimeout(()=>requestTranslation(latest,true),80);
- };
+ rec.onspeechend=()=>{speechEnded=true;log("말하기 종료 감지");clearTimeout(timer);if(latest&&latest!==lastSent)setTimeout(()=>translate(latest,true),80)};
  rec.onerror=e=>log("STT 오류 → "+e.error);
  rec.onend=()=>{$("status").textContent="중지됨";$("start").disabled=false;$("stop").disabled=true};
  $("start").onclick=()=>{if(!$("key").value.trim()){$("api").textContent="API 키부터 입력하세요";return}try{rec.start()}catch(e){}};
