@@ -35,7 +35,7 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
  <input id="key" type="password" autocomplete="off" placeholder="API 키 입력">
  <select id="model">
   <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (기본)</option>
-  <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite (예비)</option>
+  <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (예비)</option>
  </select>
  <button id="test">API 연결 테스트</button><b id="api">API 미확인</b>
  <div class="label">방 코드 (두 폰이 같아야 함)</div>
@@ -258,7 +258,8 @@ function addHist(who,t){const d=document.createElement("div");d.className=who;d.
 
 // ---------- 누르고 말하기 ----------
 // 길게 누르면: 떼는 순간 전송 / 짧게 톡 누르면: 다시 누를 때 전송
-let rec=null,listening=false,stopping=false,pressT=0,toggleMode=false,tRelease=0,curText="",cur=null;
+// 발화마다 별도 상태(utt)를 둠 → 버튼을 떼면 바로 다음 발화 가능, 이전 발화의 최종 인식은 뒤에서 마무리
+let rec=null,listening=false,pressT=0,toggleMode=false,cur=null;
 function combine(results,cjk){
  // Android Chrome은 누적 결과를 중복으로 주는 경우가 있어 앞부분이 같으면 교체
  let out="";
@@ -269,32 +270,44 @@ function combine(results,cjk){
 function startListen(){
  if(listening||!role)return;
  if(!$("key").value.trim()){$("setup").open=true;$("api").className="bad";$("api").textContent="API 키부터 입력하세요";return}
+ // 이전 발화가 아직 최종 인식 대기 중이면 끊고 새로 시작 (이미 보낸 번역은 유지됨)
+ if(rec){try{rec.abort()}catch(e){}rec=null}
  const lang=myLang(),u=ui();warm();
- const utt=cur={id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),gen:0,norm:"",ctrl:null,rel:0,hist:null};
- rec=new SR();rec.lang=LANGS[lang].sr;rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=1;
- listening=true;stopping=false;tRelease=0;curText="";
+ const utt=cur={id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),gen:0,norm:"",ctrl:null,rel:0,hist:null,text:"",t0:performance.now(),tRel:0,tFirst:0,tLast:0};
+ const r=rec=new SR();r.lang=LANGS[lang].sr;r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
+ listening=true;
  $("talk").classList.add("on");$("talk").textContent=u.listening;$("tstat").textContent="";$("mine").textContent="…";$("mineTr").textContent="";
- rec.onresult=e=>{curText=combine(e.results,LANGS[lang].cjk);$("mine").textContent=curText||"…"};
- rec.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요"};
- rec.onend=()=>{
-  listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
-  if(tRelease){const ms=performance.now()-tRelease;$("mStt").textContent=sec(ms);lg("최종 인식 도착 (뗀 후 "+sec(ms)+")")}
-  else utt.rel=Date.now()+offset; // 버튼을 떼기 전에 인식이 스스로 끝난 경우
-  const t=curText.trim();
-  if(!t){if(!utt.gen)$("tstat").textContent=u.noSpeech;return}
+ const resetBtn=()=>{listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk};
+ r.onresult=e=>{
+  utt.text=combine(e.results,LANGS[lang].cjk);utt.tLast=performance.now();
+  if(!utt.tFirst){utt.tFirst=utt.tLast;lg("첫 인식 결과 (누른 후 "+sec(utt.tFirst-utt.t0)+")")}
+  if(cur===utt)$("mine").textContent=utt.text||"…";
+ };
+ r.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요"};
+ r.onend=()=>{
+  if(rec===r){rec=null;if(listening)resetBtn()}
+  if(utt.tRel){const ms=performance.now()-utt.tRel;$("mStt").textContent=sec(ms);lg("최종 인식 도착 (뗀 후 "+sec(ms)+")")}
+  else{utt.rel=Date.now()+offset;lg("인식이 스스로 종료됨 (버튼 떼기 전)")}
+  const t=utt.text.trim();
+  if(!t){if(!utt.gen&&cur===utt)$("tstat").textContent=u.noSpeech;return}
   if(norm(t)!==utt.norm){if(utt.gen)lg("최종 인식이 달라 재번역 → "+t);send(utt,t)}
  };
- try{rec.start()}catch(e){listening=false;$("talk").classList.remove("on");lg("STT 시작 오류 → "+e.message)}
+ try{r.start()}catch(e){rec=null;resetBtn();lg("STT 시작 오류 → "+e.message)}
 }
 function stopListen(){
- if(!listening||stopping)return;stopping=true;tRelease=performance.now();cur.rel=Date.now()+offset;
+ if(!listening||!rec)return;
+ const utt=cur,u=ui(),now=performance.now();utt.tRel=now;utt.rel=Date.now()+offset;
  try{rec.stop()}catch(e){}
+ // 버튼은 바로 다시 누를 수 있게 복구 (최종 인식은 onend에서 뒤늦게 처리)
+ listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
  // 최종 인식(onend)을 기다리지 않고 지금까지의 인식문으로 즉시 번역 시작
- const t=curText.trim();if(t)send(cur,t);
+ const t=utt.text.trim();
+ lg(t?"뗌: 인식문 "+t.length+"자로 즉시 번역 (마지막 인식 "+sec(now-utt.tLast)+" 전)":"뗌: 아직 인식문 없음 → 최종 인식 대기");
+ if(t)send(utt,t);else $("tstat").textContent="…";
 }
 const talk=$("talk");
 talk.addEventListener("pointerdown",e=>{e.preventDefault();if(listening){stopListen();return}pressT=performance.now();toggleMode=false;startListen()});
-talk.addEventListener("pointerup",()=>{if(!listening||stopping)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopListen()});
+talk.addEventListener("pointerup",()=>{if(!listening)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopListen()});
 talk.addEventListener("pointercancel",()=>{if(listening&&!toggleMode)stopListen()});
 talk.addEventListener("contextmenu",e=>e.preventDefault());
 
