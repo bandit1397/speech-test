@@ -17,7 +17,7 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
 .label{font-size:.82rem;color:#666;margin-top:6px}
 .status{font-weight:800}.ok{color:#087a2f}.bad{color:#b00020}
 #recv{font-size:1.75rem;line-height:1.4;font-weight:700;min-height:2.8em;overflow-wrap:anywhere}
-#recv.flash{animation:fl 1s}@keyframes fl{from{background:#fff3b0}to{background:#fff}}
+#recv.partial{opacity:.6}#recv.flash{animation:fl 1s}@keyframes fl{from{background:#fff3b0}to{background:#fff}}
 #talk{height:26vh;min-height:140px;font-size:1.5rem;background:#111;color:#fff;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 #talk.on{background:#c62828}#talk.busy{background:#666}
 #talk:disabled{background:#bbb}
@@ -67,10 +67,12 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
 </div>
 
 <div class="card grid">
- <div class="m">음성인식 (뗀 후)<b id="mStt">-</b></div>
- <div class="m">번역 (Gemini)<b id="mTr">-</b></div>
+ <div class="m">최종 인식 (뗀 후)<b id="mStt">-</b></div>
+ <div class="m">번역 첫 조각 / 완료<b id="mTr">-</b></div>
  <div class="m">Firebase 전송<b id="mFb">-</b></div>
- <div class="m">수신 지연<b id="mRx">-</b></div>
+ <div class="m">전송 지연 (네트워크)<b id="mRx">-</b></div>
+ <div class="m">수신: 첫 표시 (말 끝→)<b id="mE2E">-</b></div>
+ <div class="m">수신: 완료 (말 끝→)<b id="mE2Ed">-</b></div>
 </div>
 
 <details class="card"><summary id="histLabel">대화 기록</summary><div id="hist"></div></details>
@@ -103,7 +105,7 @@ const tm=()=>new Date().toLocaleTimeString("ko-KR",{hour12:false});
 const lg=s=>{$("log").textContent+="\n"+tm()+" : "+s};
 const sec=ms=>(ms/1000).toFixed(2)+"초";
 
-let db=null,role="",bLang="en",room="",offset=0,unsubs=[],lastId=null;
+let db=null,role="",bLang="en",room="",offset=0,unsubs=[],lastId=null,peerHist=null;
 const myLang=()=>role==="A"?"ko":bLang, peerLang=()=>role==="A"?bLang:"ko";
 const ui=()=>UI[role==="B"?bLang:"ko"];
 
@@ -123,10 +125,19 @@ function listen(){
  unsubs.push(onValue(ref(db,base+(role==="A"?"BtoA":"AtoB")),s=>{
   const v=s.val();
   if(first){first=false;lastId=v?.id??null;return} // 이전에 남아 있던 메시지는 표시하지 않음
-  if(!v||v.id===lastId)return;lastId=v.id;
-  $("recv").textContent=v.text;$("recv").classList.remove("flash");void $("recv").offsetWidth;$("recv").classList.add("flash");
-  const d=Date.now()+offset-v.sentMs;$("mRx").textContent=(d>=0&&d<60000)?d+" ms":"-";
-  navigator.vibrate?.(60);addHist("peer",v.text);lg("수신 ← "+v.text+" ("+d+" ms)");
+  if(!v||!v.text)return;
+  // 같은 id = 같은 발화의 스트리밍 조각/보정본 → 덮어쓰기만 함
+  const now=Date.now()+offset,ok=d=>d>=0&&d<60000,isNew=v.id!==lastId;
+  $("recv").textContent=v.text;$("recv").classList.toggle("partial",!v.done);
+  const d=now-v.sentMs;$("mRx").textContent=ok(d)?d+" ms":"-";
+  if(isNew){
+   lastId=v.id;peerHist=null;$("recv").classList.remove("flash");void $("recv").offsetWidth;$("recv").classList.add("flash");navigator.vibrate?.(60);
+   const e=now-v.relMs;$("mE2E").textContent=ok(e)?e+" ms":"-";$("mE2Ed").textContent="…";
+  }
+  if(v.done){
+   if(peerHist)peerHist.textContent="💬 "+v.text;else peerHist=addHist("peer",v.text);
+   const e=now-v.relMs;$("mE2Ed").textContent=ok(e)?e+" ms":"-";lg("수신 ← "+v.text+" (말 끝→완료 "+e+" ms)");
+  }
  },e=>lg("수신 오류 → "+e.message)));
  unsubs.push(onValue(ref(db,base+"meta"),s=>{
   const l=s.val()?.bLang;
@@ -159,20 +170,40 @@ async function keepAwake(){try{if("wakeLock"in navigator&&document.visibilitySta
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&role)keepAwake()});
 
 // ---------- Gemini 번역 ----------
-function getout(d){return(d?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("").trim().replace(/^["'“”「」]+|["'“”「」]+$/g,"")}
-async function gemini(sys,text,maxTok){
+const API="https://generativelanguage.googleapis.com/v1beta/models/";
+const clean=s=>s.trim().replace(/^["'“”「」]+|["'“”「」]+$/g,"");
+// 스트리밍(SSE): 첫 조각이 나오는 즉시 onPart로 넘겨 상대 폰에 바로 표시
+async function gemini(sys,text,maxTok,onPart,signal){
  const model=$("model").value,key=$("key").value.trim();
  const gc={temperature:0,maxOutputTokens:maxTok,thinkingConfig:model.startsWith("gemini-2.5")?{thinkingBudget:0}:{thinkingLevel:"minimal"}};
  const body={contents:[{role:"user",parts:[{text}]}],generationConfig:gc};
  if(sys)body.systemInstruction={parts:[{text:sys}]};
- const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body)});
+ const r=await fetch(`${API}${model}:streamGenerateContent?alt=sse`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal});
  if(r.status===429){const e=new Error("429 요청 한도 초과");e.quota=true;throw e}
  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,300));
- return getout(await r.json());
+ const rd=r.body.getReader(),dec=new TextDecoder();let buf="",out="";
+ for(;;){
+  const{value,done}=await rd.read();if(done)break;
+  buf+=dec.decode(value,{stream:true});let i;
+  while((i=buf.indexOf("\n"))>=0){
+   const line=buf.slice(0,i).trim();buf=buf.slice(i+1);
+   if(!line.startsWith("data:"))continue;
+   const d=JSON.parse(line.slice(5));
+   const piece=(d?.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||"").join("");
+   if(piece){out+=piece;onPart?.(clean(out))}
+  }
+ }
+ return clean(out);
 }
-const translate=(text,src,tgt)=>gemini(
+const translate=(text,src,tgt,onPart,signal)=>gemini(
  `You interpret face to face between a Korean police officer and a foreign national. Translate the user's text from ${LANGS[src].en} into natural, concise ${LANGS[tgt].en}. The text comes from speech recognition and may contain recognition errors; convey the intended meaning. Output only the ${LANGS[tgt].en} translation.`,
- text,256);
+ text,256,onPart,signal);
+// 버튼을 누르는 순간 Gemini 연결(TCP/TLS)을 미리 열어 둠 — 생성 요청이 아니라 한도 소모 없음
+let warmAt=0;
+function warm(){
+ const key=$("key").value.trim();if(!key||performance.now()-warmAt<30000)return;warmAt=performance.now();
+ fetch(`${API}${$("model").value}?key=${encodeURIComponent(key)}`).catch(()=>{});
+}
 
 $("test").onclick=async()=>{
  if(!$("key").value.trim()){$("api").textContent="키를 입력하세요";return}
@@ -182,28 +213,44 @@ $("test").onclick=async()=>{
 };
 
 // ---------- 전송 ----------
-async function send(text,sttMs){
- const src=myLang(),tgt=peerLang(),u=ui();
- $("mStt").textContent=sttMs!=null?sec(sttMs):"-";
+// utt = 한 번의 발화. 버튼을 떼는 즉시 현재 인식문으로 번역을 시작하고,
+// 최종 인식문이 다르면 같은 id로 다시 번역해 상대 화면을 덮어씀(이전 요청은 취소).
+const norm=s=>s.replace(/[\s\p{P}\p{S}]/gu,"").toLowerCase();
+async function send(utt,text){
+ const g=++utt.gen,live=()=>g===utt.gen;
+ utt.ctrl?.abort();utt.ctrl=new AbortController();utt.norm=norm(text);
+ const src=myLang(),tgt=peerLang(),u=ui(),path=ref(db,"rooms/"+room+"/"+(role==="A"?"AtoB":"BtoA"));
+ const push=(t,done)=>set(path,{id:utt.id,text:t,done,src,tgt,relMs:utt.rel,sentMs:Date.now()+offset});
  $("tstat").textContent=u.translating;$("talk").classList.add("busy");
- const t1=performance.now();let out;
- try{out=await translate(text,src,tgt)}
- catch(e){$("tstat").textContent="❌ "+(e.quota?u.quota:u.err);$("talk").classList.remove("busy");lg("번역 오류 → "+e.message);return}
- const trMs=performance.now()-t1;$("mTr").textContent=sec(trMs);$("mineTr").textContent="→ "+out;
+ const t1=performance.now();let firstMs=0,out;
+ try{
+  out=await translate(text,src,tgt,part=>{
+   if(!live())return;
+   if(!firstMs){firstMs=performance.now()-t1;$("mTr").textContent=sec(firstMs)+" / …"}
+   $("mineTr").textContent="→ "+part;push(part,false).catch(e=>lg("송신 오류 → "+e.message));
+  },utt.ctrl.signal);
+ }catch(e){
+  if(!live()||e.name==="AbortError")return;
+  $("tstat").textContent="❌ "+(e.quota?u.quota:u.err);$("talk").classList.remove("busy");lg("번역 오류 → "+e.message);return;
+ }
+ if(!live())return;
+ const trMs=performance.now()-t1;$("mTr").textContent=sec(firstMs||trMs)+" / "+sec(trMs);
  if(!out){$("tstat").textContent="❌ "+u.err;$("talk").classList.remove("busy");lg("번역 결과 없음");return}
+ $("mineTr").textContent="→ "+out;
  const t2=performance.now();
  try{
-  await set(ref(db,"rooms/"+room+"/"+(role==="A"?"AtoB":"BtoA")),{id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),text:out,src,tgt,sentMs:Date.now()+offset});
+  await push(out,true);if(!live())return;
   $("mFb").textContent=sec(performance.now()-t2);$("tstat").textContent=u.sent;
-  addHist("me",text+"  →  "+out);lg("송신 → "+out+" (번역 "+sec(trMs)+")");
+  const h=text+"  →  "+out;if(utt.hist)utt.hist.textContent="🗣 "+h;else utt.hist=addHist("me",h);
+  lg("송신 → "+out+" (첫 조각 "+sec(firstMs||trMs)+", 완료 "+sec(trMs)+")");
  }catch(e){$("tstat").textContent="❌ "+u.err;lg("송신 오류 → "+e.message)}
  $("talk").classList.remove("busy");
 }
-function addHist(who,t){const d=document.createElement("div");d.className=who;d.textContent=(who==="me"?"🗣 ":"💬 ")+t;$("hist").prepend(d);while($("hist").children.length>40)$("hist").lastChild.remove()}
+function addHist(who,t){const d=document.createElement("div");d.className=who;d.textContent=(who==="me"?"🗣 ":"💬 ")+t;$("hist").prepend(d);while($("hist").children.length>40)$("hist").lastChild.remove();return d}
 
 // ---------- 누르고 말하기 ----------
 // 길게 누르면: 떼는 순간 전송 / 짧게 톡 누르면: 다시 누를 때 전송
-let rec=null,listening=false,stopping=false,pressT=0,toggleMode=false,tRelease=0;
+let rec=null,listening=false,stopping=false,pressT=0,toggleMode=false,tRelease=0,curText="",cur=null;
 function combine(results,cjk){
  // Android Chrome은 누적 결과를 중복으로 주는 경우가 있어 앞부분이 같으면 교체
  let out="";
@@ -214,20 +261,29 @@ function combine(results,cjk){
 function startListen(){
  if(listening||!role)return;
  if(!$("key").value.trim()){$("setup").open=true;$("api").className="bad";$("api").textContent="API 키부터 입력하세요";return}
- const lang=myLang(),u=ui();let text="";
+ const lang=myLang(),u=ui();warm();
+ const utt=cur={id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),gen:0,norm:"",ctrl:null,rel:0,hist:null};
  rec=new SR();rec.lang=LANGS[lang].sr;rec.continuous=true;rec.interimResults=true;rec.maxAlternatives=1;
- listening=true;stopping=false;tRelease=0;
+ listening=true;stopping=false;tRelease=0;curText="";
  $("talk").classList.add("on");$("talk").textContent=u.listening;$("tstat").textContent="";$("mine").textContent="…";$("mineTr").textContent="";
- rec.onresult=e=>{text=combine(e.results,LANGS[lang].cjk);$("mine").textContent=text||"…"};
+ rec.onresult=e=>{curText=combine(e.results,LANGS[lang].cjk);$("mine").textContent=curText||"…"};
  rec.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요"};
  rec.onend=()=>{
   listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
-  const t=text.trim();if(!t){$("tstat").textContent=u.noSpeech;return}
-  send(t,tRelease?performance.now()-tRelease:null);
+  if(tRelease){const ms=performance.now()-tRelease;$("mStt").textContent=sec(ms);lg("최종 인식 도착 (뗀 후 "+sec(ms)+")")}
+  else utt.rel=Date.now()+offset; // 버튼을 떼기 전에 인식이 스스로 끝난 경우
+  const t=curText.trim();
+  if(!t){if(!utt.gen)$("tstat").textContent=u.noSpeech;return}
+  if(norm(t)!==utt.norm){if(utt.gen)lg("최종 인식이 달라 재번역 → "+t);send(utt,t)}
  };
  try{rec.start()}catch(e){listening=false;$("talk").classList.remove("on");lg("STT 시작 오류 → "+e.message)}
 }
-function stopListen(){if(!listening||stopping)return;stopping=true;tRelease=performance.now();try{rec.stop()}catch(e){}}
+function stopListen(){
+ if(!listening||stopping)return;stopping=true;tRelease=performance.now();cur.rel=Date.now()+offset;
+ try{rec.stop()}catch(e){}
+ // 최종 인식(onend)을 기다리지 않고 지금까지의 인식문으로 즉시 번역 시작
+ const t=curText.trim();if(t)send(cur,t);
+}
 const talk=$("talk");
 talk.addEventListener("pointerdown",e=>{e.preventDefault();if(listening){stopListen();return}pressT=performance.now();toggleMode=false;startListen()});
 talk.addEventListener("pointerup",()=>{if(!listening||stopping)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopListen()});
