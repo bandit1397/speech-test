@@ -37,6 +37,11 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
   <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (기본)</option>
   <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (예비)</option>
  </select>
+ <div class="label">음성 인식 방식</div>
+ <select id="stt">
+  <option value="gemini">Gemini 직접 (녹음 → 받아쓰기+번역 한 번에, 권장)</option>
+  <option value="web">크롬 음성인식 (기존 방식)</option>
+ </select>
  <button id="test">API 연결 테스트</button><b id="api">API 미확인</b>
  <div class="label">방 코드 (두 폰이 같아야 함)</div>
  <input id="room" value="test-room" autocomplete="off">
@@ -153,12 +158,13 @@ function applyUI(){
  const u=ui();document.documentElement.lang=myLang();
  $("partnerLabel").textContent=u.partner+(role==="A"?" · "+LANGS[bLang].en+" ⇄ Korean":"");
  $("mineLabel").textContent=u.mine;$("histLabel").textContent=u.history;
- if(!listening){$("talk").textContent=u.talk;$("talk").disabled=!SR}
+ if(!listening){$("talk").textContent=u.talk;$("talk").disabled=!(geminiMode()?navigator.mediaDevices:SR)}
 }
 function choose(r){
  role=r;$("roleA").classList.toggle("active",r==="A");$("roleB").classList.toggle("active",r==="B");
  $("langBox").hidden=r!=="B";
  listen();publishLang();applyUI();keepAwake();prewarm();
+ if(geminiMode())micInit().catch(e=>lg("마이크 오류 → "+e.message)); // 역할 선택(사용자 터치) 때 마이크 권한·장치를 미리 열어 둠
  if($("key").value.trim())$("setup").open=false;
 }
 $("roleA").onclick=()=>choose("A");$("roleB").onclick=()=>choose("B");
@@ -176,7 +182,7 @@ const clean=s=>s.trim().replace(/^["'“”「」]+|["'“”「」]+$/g,"");
 async function gemini(sys,text,maxTok,onPart,signal){
  const model=$("model").value,key=$("key").value.trim();
  const gc={temperature:0,maxOutputTokens:maxTok,thinkingConfig:model.startsWith("gemini-2.5")?{thinkingBudget:0}:{thinkingLevel:"minimal"}};
- const body={contents:[{role:"user",parts:[{text}]}],generationConfig:gc};
+ const body={contents:[{role:"user",parts:Array.isArray(text)?text:[{text}]}],generationConfig:gc};
  if(sys)body.systemInstruction={parts:[{text:sys}]};
  const r=await fetch(`${API}${model}:streamGenerateContent?alt=sse`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal});
  if(r.status===429){const e=new Error("429 요청 한도 초과");e.quota=true;throw e}
@@ -224,19 +230,29 @@ $("test").onclick=async()=>{
 // utt = 한 번의 발화. 버튼을 떼는 즉시 현재 인식문으로 번역을 시작하고,
 // 최종 인식문이 다르면 같은 id로 다시 번역해 상대 화면을 덮어씀(이전 요청은 취소).
 const norm=s=>s.replace(/[\s\p{P}\p{S}]/gu,"").toLowerCase();
-async function send(utt,text){
+// 녹음(WAV)을 Gemini에 직접 보냄: 1줄째 = 번역(먼저 나오므로 바로 상대에게 스트리밍), 2줄째 = 받아쓰기
+const audioPrompt=(src,tgt)=>`You interpret face to face between a Korean police officer and a foreign national. The audio is spoken in ${LANGS[src].en}. Output exactly two lines and nothing else: line 1 = a natural, concise ${LANGS[tgt].en} translation of what was said; line 2 = a verbatim ${LANGS[src].en} transcription. No labels, no quotes. If there is no intelligible speech, output only "-".`;
+const line=(s,n)=>clean((s.split("\n").map(x=>x.trim()).filter(Boolean)[n]||"").replace(/^(line\s*\d\s*[:.\-=]\s*)/i,""));
+async function send(utt,text,wav){
  const g=++utt.gen,live=()=>g===utt.gen;
- utt.ctrl?.abort();utt.ctrl=new AbortController();utt.norm=norm(text);
+ utt.ctrl?.abort();utt.ctrl=new AbortController();if(text)utt.norm=norm(text);
  const src=myLang(),tgt=peerLang(),u=ui(),path=ref(db,"rooms/"+room+"/"+(role==="A"?"AtoB":"BtoA"));
  const push=(t,done)=>set(path,{id:utt.id,text:t,done,src,tgt,relMs:utt.rel,sentMs:Date.now()+offset});
  $("tstat").textContent=u.translating;$("talk").classList.add("busy");
  const t1=performance.now();let firstMs=0,out;
+ const onPart=raw=>{
+  if(!live())return;
+  const part=wav?line(raw,0):raw;if(!part||part==="-")return;
+  if(!firstMs){firstMs=performance.now()-t1;$("mTr").textContent=sec(firstMs)+" / …"}
+  $("mineTr").textContent="→ "+part;push(part,false).catch(e=>lg("송신 오류 → "+e.message));
+ };
  try{
-  out=await translate(text,src,tgt,part=>{
-   if(!live())return;
-   if(!firstMs){firstMs=performance.now()-t1;$("mTr").textContent=sec(firstMs)+" / …"}
-   $("mineTr").textContent="→ "+part;push(part,false).catch(e=>lg("송신 오류 → "+e.message));
-  },utt.ctrl.signal);
+  if(wav){
+   const raw=await gemini(audioPrompt(src,tgt),[{inlineData:{mimeType:"audio/wav",data:wav}}],512,onPart,utt.ctrl.signal);
+   out=line(raw,0);text=line(raw,1);
+   if(!out||out==="-"){if(live()){$("tstat").textContent=u.noSpeech;$("talk").classList.remove("busy")}return}
+   if(cur===utt)$("mine").textContent=text||"…";
+  }else out=await translate(text,src,tgt,onPart,utt.ctrl.signal);
  }catch(e){
   if(!live()||e.name==="AbortError")return;
   $("tstat").textContent="❌ "+(e.quota?u.quota:u.err);$("talk").classList.remove("busy");lg("번역 오류 → "+e.message);return;
@@ -305,11 +321,69 @@ function stopListen(){
  lg(t?"뗌: 인식문 "+t.length+"자로 즉시 번역 (마지막 인식 "+sec(now-utt.tLast)+" 전)":"뗌: 아직 인식문 없음 → 최종 인식 대기");
  if(t)send(utt,t);else $("tstat").textContent="…";
 }
+// ---------- Gemini 직접 모드: 누르는 동안 녹음 → 떼면 WAV로 전송 ----------
+// 크롬 음성인식이 일부 폰에서 뗀 뒤 3~16초 늦게 결과를 주는 문제를 피함
+const geminiMode=()=>$("stt").value==="gemini";
+let ac=null,micStream=null,proc=null,buf=null,preroll=[];
+async function micInit(){
+ if(ac)return;
+ micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+ ac=new(window.AudioContext||window.webkitAudioContext)();
+ const node=ac.createMediaStreamSource(micStream);
+ proc=ac.createScriptProcessor(2048,1,1);
+ // 누르기 직전 약 0.25초도 보관(preroll) → 첫 음절이 잘리지 않게
+ proc.onaudioprocess=e=>{const d=new Float32Array(e.inputBuffer.getChannelData(0));if(buf)buf.push(d);else{preroll.push(d);if(preroll.length>6)preroll.shift()}};
+ node.connect(proc);proc.connect(ac.destination);
+ lg("마이크 준비 ("+ac.sampleRate+" Hz)");
+}
+function micClose(){if(!ac)return;try{micStream.getTracks().forEach(t=>t.stop());ac.close()}catch(e){}ac=null;proc=null;buf=null;preroll=[]}
+$("stt").onchange=()=>{if(geminiMode()){if(role)micInit().catch(e=>lg("마이크 오류 → "+e.message))}else micClose();applyUI()};
+// 16kHz 모노 16bit WAV → base64
+function toWav(chunks,rate){
+ let n=0;for(const c of chunks)n+=c.length;
+ const all=new Float32Array(n);let o=0;for(const c of chunks){all.set(c,o);o+=c.length}
+ const R=16000,ratio=rate/R,m=Math.floor(n/ratio),pcm=new Int16Array(m);
+ for(let i=0;i<m;i++){
+  const a=Math.floor(i*ratio),b=Math.min(n,Math.floor((i+1)*ratio));let s=0;for(let j=a;j<b;j++)s+=all[j];
+  pcm[i]=Math.max(-1,Math.min(1,b>a?s/(b-a):all[a]||0))*0x7fff;
+ }
+ const bytes=new Uint8Array(44+m*2),dv=new DataView(bytes.buffer),w=(p,s)=>{for(let i=0;i<s.length;i++)bytes[p+i]=s.charCodeAt(i)};
+ w(0,"RIFF");dv.setUint32(4,36+m*2,true);w(8,"WAVE");w(12,"fmt ");dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
+ dv.setUint32(24,R,true);dv.setUint32(28,R*2,true);dv.setUint16(32,2,true);dv.setUint16(34,16,true);w(36,"data");dv.setUint32(40,m*2,true);
+ bytes.set(new Uint8Array(pcm.buffer),44);
+ let s="";for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode.apply(null,bytes.subarray(i,i+0x8000));
+ return{b64:btoa(s),sec:m/R};
+}
+async function startRec(){
+ if(listening||!role)return;
+ if(!$("key").value.trim()){$("setup").open=true;$("api").className="bad";$("api").textContent="API 키부터 입력하세요";return}
+ listening=true;cur=null;
+ try{await micInit();if(ac.state!=="running")await ac.resume()}
+ catch(e){listening=false;$("tstat").textContent="❌ 마이크 권한을 허용하세요";lg("마이크 오류 → "+e.message);return}
+ const u=ui();warm();
+ const utt=cur={id:role+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,6),gen:0,norm:"",ctrl:null,rel:0,hist:null,text:""};
+ buf=utt.pcm=[...preroll];
+ $("talk").classList.add("on");$("talk").textContent=toggleMode?u.tapStop:u.listening;$("tstat").textContent="";$("mine").textContent="🎙 …";$("mineTr").textContent="";
+}
+function stopRec(){
+ if(!listening||!cur?.pcm)return;
+ const utt=cur,u=ui(),tRel=performance.now();utt.rel=Date.now()+offset;
+ listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
+ // 떼는 순간 아직 처리되지 않은 마지막 소리까지 담기 위해 0.15초 더 녹음
+ setTimeout(()=>{
+  if(buf===utt.pcm)buf=null;if(!ac)return;
+  const w=toWav(utt.pcm,ac.sampleRate);utt.pcm=null;
+  if(w.sec<0.5){$("tstat").textContent=u.noSpeech;return}
+  lg("녹음 "+w.sec.toFixed(1)+"초 · "+Math.round(w.b64.length/1024)+"KB → Gemini 전송 (뗀 후 "+sec(performance.now()-tRel)+")");
+  send(utt,"",w.b64);
+ },150);
+}
+const startTalk=()=>geminiMode()?startRec():startListen(),stopTalk=()=>geminiMode()?stopRec():stopListen();
 const talk=$("talk");
-talk.addEventListener("pointerdown",e=>{e.preventDefault();if(listening){stopListen();return}pressT=performance.now();toggleMode=false;startListen()});
-talk.addEventListener("pointerup",()=>{if(!listening)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopListen()});
-talk.addEventListener("pointercancel",()=>{if(listening&&!toggleMode)stopListen()});
+talk.addEventListener("pointerdown",e=>{e.preventDefault();if(listening){stopTalk();return}pressT=performance.now();toggleMode=false;startTalk()});
+talk.addEventListener("pointerup",()=>{if(!listening)return;if(performance.now()-pressT<400){toggleMode=true;talk.textContent=ui().tapStop;return}stopTalk()});
+talk.addEventListener("pointercancel",()=>{if(listening&&!toggleMode)stopTalk()});
 talk.addEventListener("contextmenu",e=>e.preventDefault());
 
-if(!SR){$("talk").textContent="이 브라우저는 음성인식 미지원 (Chrome 사용)";lg("Web Speech API 미지원")}
+if(!SR){$("stt").value="gemini";$("stt").querySelector('[value="web"]').disabled=true;lg("크롬 음성인식 미지원 → Gemini 직접 모드만 사용")}
 </script></main></body></html>
