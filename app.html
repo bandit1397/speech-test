@@ -215,7 +215,9 @@ let prewarmed="";
 function prewarm(){
  const key=$("key").value.trim(),sig=$("model").value+"|"+key;if(!key||!role||prewarmed===sig)return;prewarmed=sig;
  const st=performance.now();
- gemini("","Hi",1).then(()=>lg("사전 연결 완료 ("+sec(performance.now()-st)+")"),e=>{prewarmed="";lg("사전 연결 실패 → "+e.message)});
+ // Gemini 직접 모드면 0.5초 무음 WAV로 음성 처리 경로까지 미리 준비
+ const req=geminiMode()?gemini(audioPrompt(myLang(),peerLang()),[{inlineData:{mimeType:"audio/wav",data:toWav([new Float32Array(8000)],16000).b64}}],5):gemini("","Hi",1);
+ req.then(()=>lg("사전 연결 완료 ("+sec(performance.now()-st)+")"),e=>{prewarmed="";lg("사전 연결 실패 → "+e.message)});
 }
 $("key").addEventListener("change",prewarm);$("model").addEventListener("change",prewarm);
 
@@ -337,7 +339,7 @@ async function micInit(){
  lg("마이크 준비 ("+ac.sampleRate+" Hz)");
 }
 function micClose(){if(!ac)return;try{micStream.getTracks().forEach(t=>t.stop());ac.close()}catch(e){}ac=null;proc=null;buf=null;preroll=[]}
-$("stt").onchange=()=>{if(geminiMode()){if(role)micInit().catch(e=>lg("마이크 오류 → "+e.message))}else micClose();applyUI()};
+$("stt").onchange=()=>{if(geminiMode()){if(role)micInit().catch(e=>lg("마이크 오류 → "+e.message))}else micClose();applyUI();prewarmed="";prewarm()};
 // 16kHz 모노 16bit WAV → base64
 function toWav(chunks,rate){
  let n=0;for(const c of chunks)n+=c.length;
