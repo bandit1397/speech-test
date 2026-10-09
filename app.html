@@ -1,6 +1,6 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>경찰 실시간 통역 V6</title>
+<title>경찰 실시간 통역 V7</title>
 <link rel="preconnect" href="https://generativelanguage.googleapis.com" crossorigin>
 <link rel="preconnect" href="https://police-live-translate-default-rtdb.asia-southeast1.firebasedatabase.app" crossorigin>
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
@@ -158,7 +158,7 @@ function applyUI(){
 function choose(r){
  role=r;$("roleA").classList.toggle("active",r==="A");$("roleB").classList.toggle("active",r==="B");
  $("langBox").hidden=r!=="B";
- listen();publishLang();applyUI();keepAwake();
+ listen();publishLang();applyUI();keepAwake();prewarm();
  if($("key").value.trim())$("setup").open=false;
 }
 $("roleA").onclick=()=>choose("A");$("roleB").onclick=()=>choose("B");
@@ -204,6 +204,14 @@ function warm(){
  const key=$("key").value.trim();if(!key||performance.now()-warmAt<30000)return;warmAt=performance.now();
  fetch(`${API}${$("model").value}?key=${encodeURIComponent(key)}`).catch(()=>{});
 }
+// 첫 요청만 3초 넘게 걸리는 문제(사전확인·연결·모델 준비) → 역할 선택/키·모델 변경 때 아주 작은 요청을 미리 1회
+let prewarmed="";
+function prewarm(){
+ const key=$("key").value.trim(),sig=$("model").value+"|"+key;if(!key||!role||prewarmed===sig)return;prewarmed=sig;
+ const st=performance.now();
+ gemini("","Hi",1).then(()=>lg("사전 연결 완료 ("+sec(performance.now()-st)+")"),e=>{prewarmed="";lg("사전 연결 실패 → "+e.message)});
+}
+$("key").addEventListener("change",prewarm);$("model").addEventListener("change",prewarm);
 
 $("test").onclick=async()=>{
  if(!$("key").value.trim()){$("api").textContent="키를 입력하세요";return}
