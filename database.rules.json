@@ -1,0 +1,40 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$room": {
+        ".read": "auth != null && auth.token.email == 'bandit1397@gmail.com' && $room.matches(/^[A-Za-z0-9_-]{1,40}$/)",
+        ".write": "auth != null && auth.token.email == 'bandit1397@gmail.com' && $room.matches(/^[A-Za-z0-9_-]{1,40}$/)",
+        "AtoB": {
+          ".validate": "newData.hasChildren(['id','text','done','src','tgt','relMs','sentMs'])",
+          "id": { ".validate": "newData.isString() && newData.val().length < 64" },
+          "text": { ".validate": "newData.isString() && newData.val().length < 2000" },
+          "done": { ".validate": "newData.isBoolean()" },
+          "src": { ".validate": "newData.isString() && newData.val().length < 8" },
+          "tgt": { ".validate": "newData.isString() && newData.val().length < 8" },
+          "relMs": { ".validate": "newData.isNumber()" },
+          "sentMs": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+        "BtoA": {
+          ".validate": "newData.hasChildren(['id','text','done','src','tgt','relMs','sentMs'])",
+          "id": { ".validate": "newData.isString() && newData.val().length < 64" },
+          "text": { ".validate": "newData.isString() && newData.val().length < 2000" },
+          "done": { ".validate": "newData.isBoolean()" },
+          "src": { ".validate": "newData.isString() && newData.val().length < 8" },
+          "tgt": { ".validate": "newData.isString() && newData.val().length < 8" },
+          "relMs": { ".validate": "newData.isNumber()" },
+          "sentMs": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+        "meta": {
+          ".validate": "newData.hasChildren(['bLang'])",
+          "bLang": { ".validate": "newData.isString() && newData.val().length < 8" },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

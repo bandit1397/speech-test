@@ -51,6 +51,11 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
  <input id="room" value="test-room" autocomplete="off">
  <div class="label">이 휴대폰 역할</div>
  <div class="roles"><button id="roleA">👮 경찰 A<br><small>한국어</small></button><button id="roleB">🌍 외국인 B<br><small>Foreigner</small></button></div>
+ <div class="label">Firebase 로그인 (두 폰 모두 같은 계정)</div>
+ <form id="loginForm"><input id="email" type="email" autocomplete="username" placeholder="이메일">
+ <input id="pw" type="password" autocomplete="current-password" placeholder="비밀번호">
+ <button id="login" type="submit">로그인</button><div id="loginMsg" class="status bad"></div></form>
+ <div id="authBox" hidden><span id="who" class="status ok"></span><button id="logout">로그아웃</button></div>
  <div class="label">Firebase</div><div id="conn" class="status">연결 준비 중…</div>
  <p class="note">무료 등급 연습용입니다. 실제 이름·주소·사건 정보는 입력하지 마세요.</p>
 </details>
@@ -90,6 +95,7 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js";
 import{getDatabase,ref,set,onValue}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-database.js";
+import{getAuth,onAuthStateChanged,signInWithEmailAndPassword,signOut}from"https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js";
 
 const config={apiKey:"AIzaSyCOZdr6afg-XFdAy1aNxtp5WTFOqwjv4v0",authDomain:"police-live-translate.firebaseapp.com",databaseURL:"https://police-live-translate-default-rtdb.asia-southeast1.firebasedatabase.app/",projectId:"police-live-translate",storageBucket:"police-live-translate.firebasestorage.app",messagingSenderId:"713741196450",appId:"1:713741196450:web:4e93fadf6ff85a3020cbfb"};
 
@@ -144,20 +150,39 @@ const tm=()=>new Date().toLocaleTimeString("ko-KR",{hour12:false});
 const lg=s=>{$("log").textContent+="\n"+tm()+" : "+s};
 const sec=ms=>(ms/1000).toFixed(2)+"초";
 
-let db=null,role="",bLang="en",room="",offset=0,unsubs=[],lastId=null,peerHist=null;
+let db=null,auth=null,role="",bLang="en",room="",offset=0,unsubs=[],lastId=null,peerHist=null;
 const myLang=()=>role==="A"?"ko":bLang, peerLang=()=>role==="A"?bLang:"ko";
 const ui=()=>UI[role==="B"?bLang:"ko"];
 
 // ---------- Firebase ----------
 try{
- db=getDatabase(initializeApp(config));
+ const app=initializeApp(config);db=getDatabase(app);auth=getAuth(app);
  onValue(ref(db,".info/connected"),s=>{const c=!!s.val();$("conn").textContent=c?"✅ Firebase 연결됨":"⏳ 연결 대기";$("conn").className="status "+(c?"ok":"")});
  onValue(ref(db,".info/serverTimeOffset"),s=>{offset=s.val()||0});
 }catch(e){$("conn").textContent="❌ 초기화 실패";$("conn").className="status bad";lg("Firebase 초기화 오류 → "+e.message)}
 
+// ---------- Firebase 로그인 (DB 규칙: 로그인한 계정만 읽기·쓰기 허용) ----------
+// 로그인 상태는 이 브라우저에 유지되므로 폰마다 처음 한 번만 하면 됨
+if(auth){
+ onAuthStateChanged(auth,u=>{
+  $("loginForm").hidden=!!u;$("authBox").hidden=!u;$("who").textContent=u?"✅ "+u.email:"";
+  lg(u?"로그인됨 → "+u.email:"로그인 필요");
+  if(role){listen();publishLang()}
+ });
+ $("loginForm").onsubmit=async e=>{
+  e.preventDefault();$("login").disabled=true;
+  $("loginMsg").textContent="";try{await signInWithEmailAndPassword(auth,$("email").value.trim(),$("pw").value);$("pw").value=""}
+  catch(err){$("loginMsg").textContent="❌ 로그인 실패 ("+err.code+")";lg("로그인 오류 → "+err.code)}
+  $("login").disabled=false;
+ };
+ $("logout").onclick=()=>signOut(auth);
+}
+const authed=()=>!!auth?.currentUser;
+
 function listen(){
  unsubs.forEach(u=>u());unsubs=[];lastId=null;
  if(!db||!role)return;
+ if(!authed()){$("conn").textContent="🔒 로그인하세요";$("conn").className="status bad";$("setup").open=true;return}
  room=($("room").value.trim().replace(/[^A-Za-z0-9_-]/g,"")||"test-room");$("room").value=room;
  const base="rooms/"+room+"/";
  let first=true;
@@ -185,7 +210,7 @@ function listen(){
  }));
  lg("방 "+room+" 역할 "+role+" 수신 시작");
 }
-function publishLang(){if(db&&role==="B")set(ref(db,"rooms/"+room+"/meta"),{bLang}).catch(e=>lg("언어 저장 오류 → "+e.message))}
+function publishLang(){if(db&&role==="B"&&authed())set(ref(db,"rooms/"+room+"/meta"),{bLang}).catch(e=>lg("언어 저장 오류 → "+e.message))}
 
 // ---------- 역할 / 화면 언어 ----------
 function applyUI(){
