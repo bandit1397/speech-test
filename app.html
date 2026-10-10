@@ -21,11 +21,15 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
 #talk{height:26vh;min-height:140px;font-size:1.5rem;background:#111;color:#fff;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
 #talk.on{background:#c62828}#talk.busy{background:#666}
 #talk:disabled{background:#bbb}
+#recv,#mine,#mineTr,#hist div,#talk,#tstat{unicode-bidi:plaintext} /* 아랍어 등 RTL 문장은 오른쪽→왼쪽으로 표시 */
 #mine{font-size:1.05rem;color:#444;overflow-wrap:anywhere}#mineTr{font-size:.95rem;color:#777;overflow-wrap:anywhere}
 #tstat{font-weight:700;text-align:center;min-height:1.4em}
 .m{background:#f2f2f3;padding:9px;border-radius:9px;font-size:.8rem;color:#555}.m b{display:block;font-size:1.05rem;color:#111}
 #hist div{padding:7px 0;border-bottom:1px solid #eee;overflow-wrap:anywhere}#hist .me{color:#555}#hist .peer{font-weight:700}
 .log{white-space:pre-wrap;font-size:.82rem;color:#555;line-height:1.5}
+#langNow{font-size:1.25rem;font-weight:800;padding:4px 0}
+#langGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+#langGrid button{margin:0;padding:12px 8px;font-size:1.05rem;text-align:left}
 .note{font-size:.85rem;background:#fff4d5;padding:10px;border-radius:10px;line-height:1.5}
 </style></head><body><main>
 
@@ -47,15 +51,15 @@ button{border:0;font-weight:800;background:#e8e8ea;color:#111}
  <input id="room" value="test-room" autocomplete="off">
  <div class="label">이 휴대폰 역할</div>
  <div class="roles"><button id="roleA">👮 경찰 A<br><small>한국어</small></button><button id="roleB">🌍 외국인 B<br><small>Foreigner</small></button></div>
- <div id="langBox" hidden>
-  <div class="label">외국인 언어 / Language</div>
-  <select id="lang">
-   <option value="en">🇺🇸 English</option><option value="zh">🇨🇳 中文</option><option value="ja">🇯🇵 日本語</option>
-   <option value="vi">🇻🇳 Tiếng Việt</option><option value="es">🇪🇸 Español</option>
-  </select>
- </div>
  <div class="label">Firebase</div><div id="conn" class="status">연결 준비 중…</div>
  <p class="note">무료 등급 연습용입니다. 실제 이름·주소·사건 정보는 입력하지 마세요.</p>
+</details>
+
+<!-- 외국인(B) 휴대폰 화면에 바로 보이는 언어 선택 — 외국인이 직접 고름 -->
+<details id="langBox" class="card" hidden>
+ <summary id="langNow">🌐 Language</summary>
+ <div class="label">🌐 Choose your language · 选择语言 · 言語を選択 · اختر لغتك</div>
+ <div id="langGrid"></div>
 </details>
 
 <div class="card">
@@ -95,14 +99,44 @@ const LANGS={
  zh:{en:"Simplified Chinese",sr:"zh-CN",cjk:true},
  ja:{en:"Japanese",sr:"ja-JP",cjk:true},
  vi:{en:"Vietnamese",sr:"vi-VN",cjk:false},
- es:{en:"Spanish",sr:"es-ES",cjk:false}};
+ es:{en:"Spanish",sr:"es-ES",cjk:false},
+ th:{en:"Thai",sr:"th-TH",cjk:false},
+ id:{en:"Indonesian",sr:"id-ID",cjk:false},
+ ms:{en:"Malay",sr:"ms-MY",cjk:false},
+ fil:{en:"Filipino (Tagalog)",sr:"fil-PH",cjk:false},
+ mn:{en:"Mongolian (Cyrillic script)",sr:"mn-MN",cjk:false},
+ uz:{en:"Uzbek (Latin script)",sr:"uz-UZ",cjk:false},
+ ne:{en:"Nepali",sr:"ne-NP",cjk:false},
+ km:{en:"Khmer",sr:"km-KH",cjk:false},
+ my:{en:"Burmese",sr:"my-MM",cjk:false},
+ hi:{en:"Hindi",sr:"hi-IN",cjk:false},
+ ru:{en:"Russian",sr:"ru-RU",cjk:false},
+ ar:{en:"Arabic (Modern Standard)",sr:"ar-SA",cjk:false},
+ fr:{en:"French",sr:"fr-FR",cjk:false},
+ de:{en:"German",sr:"de-DE",cjk:false},
+ pt:{en:"Portuguese",sr:"pt-BR",cjk:false}};
 const UI={
  ko:{talk:"🎤 누르고 말하기",listening:"🔴 듣는 중… (떼면 전송)",tapStop:"🔴 듣는 중… (다시 누르면 전송)",translating:"번역 중…",sent:"✅ 전송됨",partner:"외국인 (번역됨)",mine:"내가 한 말",noSpeech:"음성이 인식되지 않았습니다",err:"오류",quota:"요청 한도 초과 — 잠시 후 다시",history:"대화 기록"},
  en:{talk:"🎤 Hold to speak",listening:"🔴 Listening… (release to send)",tapStop:"🔴 Listening… (tap again to send)",translating:"Translating…",sent:"✅ Sent",partner:"Police officer (translated)",mine:"What you said",noSpeech:"No speech detected",err:"Error",quota:"Too many requests — try again shortly",history:"Conversation"},
  zh:{talk:"🎤 按住说话",listening:"🔴 正在听…（松开发送）",tapStop:"🔴 正在听…（再按一次发送）",translating:"翻译中…",sent:"✅ 已发送",partner:"警察（已翻译）",mine:"您说的话",noSpeech:"未识别到语音",err:"错误",quota:"请求过多，请稍后再试",history:"对话记录"},
  ja:{talk:"🎤 押しながら話す",listening:"🔴 聞いています…（離すと送信）",tapStop:"🔴 聞いています…（もう一度押すと送信）",translating:"翻訳中…",sent:"✅ 送信しました",partner:"警察官（翻訳）",mine:"あなたの発言",noSpeech:"音声が認識されませんでした",err:"エラー",quota:"リクエストが多すぎます。少し待ってください",history:"会話履歴"},
  vi:{talk:"🎤 Nhấn giữ để nói",listening:"🔴 Đang nghe… (thả ra để gửi)",tapStop:"🔴 Đang nghe… (nhấn lần nữa để gửi)",translating:"Đang dịch…",sent:"✅ Đã gửi",partner:"Cảnh sát (đã dịch)",mine:"Bạn đã nói",noSpeech:"Không nhận diện được giọng nói",err:"Lỗi",quota:"Quá nhiều yêu cầu — vui lòng thử lại sau",history:"Lịch sử hội thoại"},
- es:{talk:"🎤 Mantén pulsado para hablar",listening:"🔴 Escuchando… (suelta para enviar)",tapStop:"🔴 Escuchando… (pulsa otra vez para enviar)",translating:"Traduciendo…",sent:"✅ Enviado",partner:"Policía (traducido)",mine:"Lo que dijiste",noSpeech:"No se detectó voz",err:"Error",quota:"Demasiadas solicitudes — inténtalo en un momento",history:"Conversación"}};
+ es:{talk:"🎤 Mantén pulsado para hablar",listening:"🔴 Escuchando… (suelta para enviar)",tapStop:"🔴 Escuchando… (pulsa otra vez para enviar)",translating:"Traduciendo…",sent:"✅ Enviado",partner:"Policía (traducido)",mine:"Lo que dijiste",noSpeech:"No se detectó voz",err:"Error",quota:"Demasiadas solicitudes — inténtalo en un momento",history:"Conversación"},
+ th:{talk:"🎤 กดค้างไว้เพื่อพูด",listening:"🔴 กำลังฟัง… (ปล่อยเพื่อส่ง)",tapStop:"🔴 กำลังฟัง… (แตะอีกครั้งเพื่อส่ง)",translating:"กำลังแปล…",sent:"✅ ส่งแล้ว",partner:"ตำรวจ (แปลแล้ว)",mine:"สิ่งที่คุณพูด",noSpeech:"ไม่พบเสียงพูด",err:"ข้อผิดพลาด",quota:"มีคำขอมากเกินไป — โปรดลองอีกครั้งในอีกสักครู่",history:"ประวัติการสนทนา"},
+ id:{talk:"🎤 Tekan dan tahan untuk bicara",listening:"🔴 Mendengarkan… (lepas untuk mengirim)",tapStop:"🔴 Mendengarkan… (ketuk lagi untuk mengirim)",translating:"Menerjemahkan…",sent:"✅ Terkirim",partner:"Polisi (diterjemahkan)",mine:"Yang Anda katakan",noSpeech:"Suara tidak terdeteksi",err:"Kesalahan",quota:"Terlalu banyak permintaan — coba lagi sebentar",history:"Riwayat percakapan"},
+ ms:{talk:"🎤 Tekan dan tahan untuk bercakap",listening:"🔴 Mendengar… (lepaskan untuk hantar)",tapStop:"🔴 Mendengar… (tekan sekali lagi untuk hantar)",translating:"Menterjemah…",sent:"✅ Dihantar",partner:"Polis (diterjemah)",mine:"Apa yang anda katakan",noSpeech:"Tiada suara dikesan",err:"Ralat",quota:"Terlalu banyak permintaan — cuba lagi sebentar",history:"Perbualan"},
+ fil:{talk:"🎤 Pindutin nang matagal para magsalita",listening:"🔴 Nakikinig… (bitawan para ipadala)",tapStop:"🔴 Nakikinig… (pindutin ulit para ipadala)",translating:"Isinasalin…",sent:"✅ Naipadala",partner:"Pulis (isinalin)",mine:"Ang sinabi mo",noSpeech:"Walang narinig na boses",err:"Error",quota:"Masyadong maraming request — subukan ulit mamaya",history:"Usapan"},
+ mn:{talk:"🎤 Дараад ярина уу",listening:"🔴 Сонсож байна… (суллавал илгээнэ)",tapStop:"🔴 Сонсож байна… (дахин дарвал илгээнэ)",translating:"Орчуулж байна…",sent:"✅ Илгээгдлээ",partner:"Цагдаа (орчуулсан)",mine:"Таны хэлсэн үг",noSpeech:"Яриа танигдсангүй",err:"Алдаа",quota:"Хүсэлт хэт олон байна — түр хүлээгээд дахин оролдоно уу",history:"Ярианы түүх"},
+ uz:{talk:"🎤 Gapirish uchun bosib turing",listening:"🔴 Tinglanmoqda… (yuborish uchun qoʻyib yuboring)",tapStop:"🔴 Tinglanmoqda… (yuborish uchun yana bosing)",translating:"Tarjima qilinmoqda…",sent:"✅ Yuborildi",partner:"Politsiya xodimi (tarjima)",mine:"Siz aytgan gap",noSpeech:"Ovoz aniqlanmadi",err:"Xato",quota:"Soʻrovlar juda koʻp — birozdan soʻng qayta urinib koʻring",history:"Suhbat tarixi"},
+ ne:{talk:"🎤 बोल्न थिचिराख्नुहोस्",listening:"🔴 सुन्दैछ… (पठाउन छोड्नुहोस्)",tapStop:"🔴 सुन्दैछ… (पठाउन फेरि थिच्नुहोस्)",translating:"अनुवाद हुँदैछ…",sent:"✅ पठाइयो",partner:"प्रहरी (अनुवादित)",mine:"तपाईंले भनेको कुरा",noSpeech:"कुनै आवाज पहिचान भएन",err:"त्रुटि",quota:"धेरै अनुरोधहरू — केही बेरपछि फेरि प्रयास गर्नुहोस्",history:"कुराकानी"},
+ km:{talk:"🎤 ចុចឱ្យជាប់ដើម្បីនិយាយ",listening:"🔴 កំពុងស្តាប់… (លែងដើម្បីផ្ញើ)",tapStop:"🔴 កំពុងស្តាប់… (ចុចម្តងទៀតដើម្បីផ្ញើ)",translating:"កំពុងបកប្រែ…",sent:"✅ បានផ្ញើ",partner:"ប៉ូលីស (បានបកប្រែ)",mine:"អ្វីដែលអ្នកបាននិយាយ",noSpeech:"រកមិនឃើញសំឡេងនិយាយ",err:"កំហុស",quota:"សំណើច្រើនពេក — សូមព្យាយាមម្តងទៀតបន្តិចក្រោយ",history:"ប្រវត្តិសន្ទនា"},
+ my:{talk:"🎤 စကားပြောရန် ဖိထားပါ",listening:"🔴 နားထောင်နေသည်… (ပို့ရန် လွှတ်ပါ)",tapStop:"🔴 နားထောင်နေသည်… (ပို့ရန် ထပ်နှိပ်ပါ)",translating:"ဘာသာပြန်နေသည်…",sent:"✅ ပို့ပြီးပါပြီ",partner:"ရဲ (ဘာသာပြန်ထားသည်)",mine:"သင်ပြောခဲ့သည့်စကား",noSpeech:"စကားသံ မတွေ့ပါ",err:"အမှား",quota:"တောင်းဆိုမှု များလွန်းသည် — ခဏနေမှ ထပ်ကြိုးစားပါ",history:"စကားပြောမှတ်တမ်း"},
+ hi:{talk:"🎤 बोलने के लिए दबाकर रखें",listening:"🔴 सुन रहे हैं… (भेजने के लिए छोड़ें)",tapStop:"🔴 सुन रहे हैं… (भेजने के लिए फिर से दबाएँ)",translating:"अनुवाद हो रहा है…",sent:"✅ भेज दिया गया",partner:"पुलिस अधिकारी (अनुवादित)",mine:"आपने जो कहा",noSpeech:"कोई आवाज़ नहीं पहचानी गई",err:"त्रुटि",quota:"बहुत अधिक अनुरोध — थोड़ी देर बाद फिर कोशिश करें",history:"बातचीत"},
+ ru:{talk:"🎤 Удерживайте, чтобы говорить",listening:"🔴 Слушаю… (отпустите, чтобы отправить)",tapStop:"🔴 Слушаю… (нажмите ещё раз, чтобы отправить)",translating:"Перевод…",sent:"✅ Отправлено",partner:"Полицейский (перевод)",mine:"Что вы сказали",noSpeech:"Речь не распознана",err:"Ошибка",quota:"Слишком много запросов — попробуйте чуть позже",history:"История разговора"},
+ ar:{talk:"🎤 اضغط مع الاستمرار للتحدث",listening:"🔴 جارٍ الاستماع… (اترك الزر للإرسال)",tapStop:"🔴 جارٍ الاستماع… (اضغط مرة أخرى للإرسال)",translating:"جارٍ الترجمة…",sent:"✅ تم الإرسال",partner:"الشرطي (مترجم)",mine:"ما قلته",noSpeech:"لم يتم التعرف على أي كلام",err:"خطأ",quota:"طلبات كثيرة جدًا — حاول مرة أخرى بعد قليل",history:"سجل المحادثة"},
+ fr:{talk:"🎤 Maintenez pour parler",listening:"🔴 Écoute… (relâchez pour envoyer)",tapStop:"🔴 Écoute… (appuyez à nouveau pour envoyer)",translating:"Traduction…",sent:"✅ Envoyé",partner:"Policier (traduit)",mine:"Ce que vous avez dit",noSpeech:"Aucune parole détectée",err:"Erreur",quota:"Trop de requêtes — réessayez dans un instant",history:"Conversation"},
+ de:{talk:"🎤 Zum Sprechen gedrückt halten",listening:"🔴 Höre zu… (loslassen zum Senden)",tapStop:"🔴 Höre zu… (erneut tippen zum Senden)",translating:"Übersetze…",sent:"✅ Gesendet",partner:"Polizist (übersetzt)",mine:"Was Sie gesagt haben",noSpeech:"Keine Sprache erkannt",err:"Fehler",quota:"Zu viele Anfragen — bitte gleich noch einmal versuchen",history:"Gesprächsverlauf"},
+ pt:{talk:"🎤 Segure para falar",listening:"🔴 Ouvindo… (solte para enviar)",tapStop:"🔴 Ouvindo… (toque de novo para enviar)",translating:"Traduzindo…",sent:"✅ Enviado",partner:"Policial (traduzido)",mine:"O que você disse",noSpeech:"Nenhuma fala detectada",err:"Erro",quota:"Muitas solicitações — tente novamente em instantes",history:"Conversa"}};
 
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const $=x=>document.getElementById(x);
@@ -162,13 +196,26 @@ function applyUI(){
 }
 function choose(r){
  role=r;$("roleA").classList.toggle("active",r==="A");$("roleB").classList.toggle("active",r==="B");
- $("langBox").hidden=r!=="B";
+ $("langBox").hidden=r!=="B";$("langBox").open=r==="B"; // 외국인 폰은 언어 목록을 펼친 채로 시작
  listen();publishLang();applyUI();keepAwake();prewarm();
  if(geminiMode())micInit().catch(e=>lg("마이크 오류 → "+e.message)); // 역할 선택(사용자 터치) 때 마이크 권한·장치를 미리 열어 둠
  if($("key").value.trim())$("setup").open=false;
 }
 $("roleA").onclick=()=>choose("A");$("roleB").onclick=()=>choose("B");
-$("lang").onchange=()=>{bLang=$("lang").value;publishLang();applyUI()};
+// 언어 버튼: 국기 + 그 나라 말로 된 이름
+const LANG_BTN={en:"🇺🇸 English",zh:"🇨🇳 中文",ja:"🇯🇵 日本語",vi:"🇻🇳 Tiếng Việt",th:"🇹🇭 ภาษาไทย",id:"🇮🇩 Bahasa Indonesia",
+ ms:"🇲🇾 Bahasa Melayu",fil:"🇵🇭 Filipino",mn:"🇲🇳 Монгол",uz:"🇺🇿 Oʻzbek",ne:"🇳🇵 नेपाली",km:"🇰🇭 ខ្មែរ",
+ my:"🇲🇲 မြန်မာ",hi:"🇮🇳 हिन्दी",ru:"🇷🇺 Русский",ar:"🇸🇦 العربية",es:"🇪🇸 Español",fr:"🇫🇷 Français",de:"🇩🇪 Deutsch",pt:"🇧🇷 Português"};
+function showLang(){
+ $("langNow").textContent="🌐 "+LANG_BTN[bLang]+"  ▾";
+ for(const b of $("langGrid").children)b.classList.toggle("active",b.dataset.l===bLang);
+}
+for(const[l,name]of Object.entries(LANG_BTN)){
+ const b=document.createElement("button");b.dataset.l=l;b.textContent=name;
+ b.onclick=()=>{bLang=l;showLang();$("langBox").open=false;publishLang();applyUI()};
+ $("langGrid").append(b);
+}
+showLang();
 $("room").onchange=()=>{if(role){listen();publishLang()}};
 
 // ---------- 화면 꺼짐 방지 ----------
@@ -301,7 +348,7 @@ function startListen(){
   if(!utt.tFirst){utt.tFirst=utt.tLast;lg("첫 인식 결과 (누른 후 "+sec(utt.tFirst-utt.t0)+")")}
   if(cur===utt)$("mine").textContent=utt.text||"…";
  };
- r.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요"};
+ r.onerror=e=>{if(e.error!=="no-speech"&&e.error!=="aborted")lg("STT 오류 → "+e.error);if(e.error==="not-allowed")$("tstat").textContent="❌ 마이크 권한을 허용하세요";if(e.error==="language-not-supported")$("tstat").textContent="❌ "+LANGS[lang].en+": 크롬 음성인식 미지원 → 'Gemini 직접' 방식을 쓰세요"};
  r.onend=()=>{
   if(rec===r){rec=null;if(listening)resetBtn()}
   if(utt.tRel){const ms=performance.now()-utt.tRel;$("mStt").textContent=sec(ms);lg("최종 인식 도착 (뗀 후 "+sec(ms)+")")}
