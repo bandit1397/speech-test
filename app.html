@@ -250,14 +250,28 @@ document.addEventListener("visibilitychange",()=>{if(document.visibilityState===
 // ---------- Gemini 번역 ----------
 const API="https://generativelanguage.googleapis.com/v1beta/models/";
 const clean=s=>s.trim().replace(/^["'“”「」]+|["'“”「」]+$/g,"");
-// 스트리밍(SSE): 첫 조각이 나오는 즉시 onPart로 넘겨 상대 폰에 바로 표시
+// 429(한도 초과) → 다른 모델로 바로 재시도 (모델마다 무료 한도가 따로 있음). 막힌 모델은 60초 동안 뒤로 미룸
+const quotaUntil={};
+function modelOrder(){
+ const sel=$("model").value,all=[...$("model").options].map(o=>o.value),now=Date.now();
+ return[sel,...all.filter(m=>m!==sel)].sort((a,b)=>((quotaUntil[a]||0)>now)-((quotaUntil[b]||0)>now));
+}
 async function gemini(sys,text,maxTok,onPart,signal){
- const model=$("model").value,key=$("key").value.trim();
+ let err;
+ for(const m of modelOrder()){
+  try{return await geminiOnce(m,sys,text,maxTok,onPart,signal)}
+  catch(e){if(!e.quota)throw e;err=e;quotaUntil[m]=Date.now()+60000;lg(m+" 한도 초과 → 다른 모델로 재시도")}
+ }
+ throw err;
+}
+// 스트리밍(SSE): 첫 조각이 나오는 즉시 onPart(정리된 글, 원본)로 넘겨 상대 폰에 바로 표시
+async function geminiOnce(model,sys,text,maxTok,onPart,signal){
+ const key=$("key").value.trim();
  const gc={temperature:0,maxOutputTokens:maxTok,thinkingConfig:model.startsWith("gemini-2.5")?{thinkingBudget:0}:{thinkingLevel:"minimal"}};
  const body={contents:[{role:"user",parts:Array.isArray(text)?text:[{text}]}],generationConfig:gc};
  if(sys)body.systemInstruction={parts:[{text:sys}]};
  const r=await fetch(`${API}${model}:streamGenerateContent?alt=sse`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":key},body:JSON.stringify(body),signal});
- if(r.status===429){const e=new Error("429 요청 한도 초과");e.quota=true;throw e}
+ if(r.status===429){const e=new Error("429 요청 한도 초과 ("+model+")");e.quota=true;throw e}
  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,300));
  const rd=r.body.getReader(),dec=new TextDecoder();let buf="",out="";
  for(;;){
@@ -268,7 +282,7 @@ async function gemini(sys,text,maxTok,onPart,signal){
    if(!line.startsWith("data:"))continue;
    const d=JSON.parse(line.slice(5));
    const piece=(d?.candidates?.[0]?.content?.parts||[]).filter(p=>!p.thought).map(p=>p.text||"").join("");
-   if(piece){out+=piece;onPart?.(clean(out))}
+   if(piece){out+=piece;onPart?.(clean(out),out)}
   }
  }
  return clean(out);
@@ -305,7 +319,10 @@ $("test").onclick=async()=>{
 // 최종 인식문이 다르면 같은 id로 다시 번역해 상대 화면을 덮어씀(이전 요청은 취소).
 const norm=s=>s.replace(/[\s\p{P}\p{S}]/gu,"").toLowerCase();
 // 녹음(WAV)을 Gemini에 직접 보냄: 1줄째 = 번역(먼저 나오므로 바로 상대에게 스트리밍), 2줄째 = 받아쓰기
-const audioPrompt=(src,tgt)=>`You interpret face to face between a Korean police officer and a foreign national. The audio is spoken in ${LANGS[src].en}. Output exactly two lines and nothing else: line 1 = a natural, concise ${LANGS[tgt].en} translation of what was said; line 2 = a verbatim ${LANGS[src].en} transcription. No labels, no quotes. If there is no intelligible speech, output only "-".`;
+const audioPrompt=(src,tgt)=>`You interpret face to face between a Korean police officer and a foreign national. The audio is in ${LANGS[src].en}. Output exactly two lines:
+${LANGS[tgt].en} translation (natural, concise)
+${LANGS[src].en} verbatim transcription
+No labels, quotes or other text. If there is no intelligible speech, output only -`;
 const line=(s,n)=>clean((s.split("\n").map(x=>x.trim()).filter(Boolean)[n]||"").replace(/^(line\s*\d\s*[:.\-=]\s*)/i,""));
 async function send(utt,text,wav){
  const g=++utt.gen,live=()=>g===utt.gen;
@@ -313,12 +330,20 @@ async function send(utt,text,wav){
  const src=myLang(),tgt=peerLang(),u=ui(),path=ref(db,"rooms/"+room+"/"+(role==="A"?"AtoB":"BtoA"));
  const push=(t,done)=>set(path,{id:utt.id,text:t,done,src,tgt,relMs:utt.rel,sentMs:Date.now()+offset});
  $("tstat").textContent=u.translating;$("talk").classList.add("busy");
- const t1=performance.now();let firstMs=0,out;
- const onPart=raw=>{
-  if(!live())return;
-  const part=wav?line(raw,0):raw;if(!part||part==="-")return;
+ const t1=performance.now();let firstMs=0,out,early=null;
+ const onPart=(txt,raw)=>{
+  if(!live()||early)return;
+  const part=wav?line(raw,0):txt;if(!part||part==="-")return;
   if(!firstMs){firstMs=performance.now()-t1;$("mTr").textContent=sec(firstMs)+" / …"}
-  $("mineTr").textContent="→ "+part;push(part,false).catch(e=>lg("송신 오류 → "+e.message));
+  $("mineTr").textContent="→ "+part;
+  // 번역 줄(1줄째)이 끝나면 받아쓰기(2줄째)를 기다리지 않고 바로 완료로 전송
+  if(wav&&/\S[^\n]*\n/.test(raw)){
+   const t=performance.now();early={text:part,ms:t-t1,t,p:push(part,true)};
+   $("mTr").textContent=sec(firstMs)+" / "+sec(early.ms);
+   early.p.then(()=>{if(live()){$("tstat").textContent=u.sent;$("talk").classList.remove("busy")}},()=>{});
+   return;
+  }
+  push(part,false).catch(e=>lg("송신 오류 → "+e.message));
  };
  try{
   if(wav){
@@ -332,12 +357,13 @@ async function send(utt,text,wav){
   $("tstat").textContent="❌ "+(e.quota?u.quota:u.err);$("talk").classList.remove("busy");lg("번역 오류 → "+e.message);return;
  }
  if(!live())return;
- const trMs=performance.now()-t1;$("mTr").textContent=sec(firstMs||trMs)+" / "+sec(trMs);
+ if(early)out=early.text; // 이미 완료로 보낸 번역을 그대로 사용 (다시 보내지 않음)
+ const trMs=early?early.ms:performance.now()-t1;$("mTr").textContent=sec(firstMs||trMs)+" / "+sec(trMs);
  if(!out){$("tstat").textContent="❌ "+u.err;$("talk").classList.remove("busy");lg("번역 결과 없음");return}
  $("mineTr").textContent="→ "+out;
- const t2=performance.now();
+ const t2=early?early.t:performance.now();
  try{
-  await push(out,true);if(!live())return;
+  await(early?early.p:push(out,true));if(!live())return;
   $("mFb").textContent=sec(performance.now()-t2);$("tstat").textContent=u.sent;
   const h=text+"  →  "+out;if(utt.hist)utt.hist.textContent="🗣 "+h;else utt.hist=addHist("me",h);
   lg("송신 → "+out+" (첫 조각 "+sec(firstMs||trMs)+", 완료 "+sec(trMs)+")");
@@ -443,14 +469,28 @@ function stopRec(){
  if(!listening||!cur?.pcm)return;
  const utt=cur,u=ui(),tRel=performance.now();utt.rel=Date.now()+offset;
  listening=false;$("talk").classList.remove("on");$("talk").textContent=u.talk;
- // 떼는 순간 아직 처리되지 않은 마지막 소리까지 담기 위해 0.15초 더 녹음
+ // 떼는 순간 아직 처리되지 않은 마지막 소리까지 담기 위해 0.06초 더 녹음 (오디오 버퍼 1개 ≈ 0.043초)
  setTimeout(()=>{
   if(buf===utt.pcm)buf=null;if(!ac)return;
-  const w=toWav(utt.pcm,ac.sampleRate);utt.pcm=null;
-  if(w.sec<0.5){$("tstat").textContent=u.noSpeech;return}
-  lg("녹음 "+w.sec.toFixed(1)+"초 · "+Math.round(w.b64.length/1024)+"KB → Gemini 전송 (뗀 후 "+sec(performance.now()-tRel)+")");
+  const rate=ac.sampleRate,all=utt.pcm;utt.pcm=null;
+  const rawSec=all.reduce((n,c)=>n+c.length,0)/rate;
+  if(rawSec<0.5){$("tstat").textContent=u.noSpeech;return}
+  const w=toWav(trimSilence(all,rate),rate);
+  lg("녹음 "+rawSec.toFixed(1)+"초 → 무음 제거 "+w.sec.toFixed(1)+"초 · "+Math.round(w.b64.length/1024)+"KB → Gemini 전송 (뗀 후 "+sec(performance.now()-tRel)+")");
   send(utt,"",w.b64);
- },150);
+ },60);
+}
+// 앞뒤 무음 제거: 조각(약 0.043초)별 음량으로 말소리 구간을 찾고 앞 약 0.13초 · 뒤 약 0.17초 여유를 남김
+// 업로드 크기와 음성 토큰이 줄어 응답이 빨라짐. 말소리를 못 찾으면 그대로 보냄(판단은 Gemini에게)
+function trimSilence(chunks,rate){
+ if(!chunks.length)return chunks;
+ const rms=chunks.map(c=>{let s=0;for(let i=0;i<c.length;i++)s+=c[i]*c[i];return Math.sqrt(s/c.length)});
+ const sorted=[...rms].sort((a,b)=>a-b),floor=sorted[Math.floor(sorted.length*0.1)],peak=sorted[sorted.length-1];
+ const thr=Math.max(0.005,floor*3,peak*0.06);
+ let a=rms.findIndex(v=>v>thr),b=rms.length-1;while(b>=0&&rms[b]<=thr)b--;
+ if(a<0)return chunks;
+ const per=chunks[0].length/rate,pre=Math.ceil(0.13/per),post=Math.ceil(0.17/per);
+ return chunks.slice(Math.max(0,a-pre),Math.min(chunks.length,b+1+post));
 }
 const startTalk=()=>geminiMode()?startRec():startListen(),stopTalk=()=>geminiMode()?stopRec():stopListen();
 const talk=$("talk");
