@@ -8,6 +8,8 @@
 | index.html | https://bandit1397.github.io/speech-test/ | 예전 시험 버전 (V4, 한 폰 한→영) |
 | two-phone-test-v5.html | https://bandit1397.github.io/speech-test/two-phone-test-v5.html | 예전 시험 버전 (V5) |
 
+| Live API 시험판 (별도 저장소) | https://bandit1397.github.io/-speech-test-gemini-live-api/app-live.html | Gemini Live API 동시통역 버전, 2026-11-11 무료로 정상 작동 확인. 원리와 개발 자료는 [-speech-test-gemini-live-api README](https://github.com/bandit1397/-speech-test-gemini-live-api) 참고 |
+
 - GitHub에 푸시한 뒤 반영까지 1~2분 걸립니다. 폰에 예전 화면이 보이면 새로고침하세요.
 - 마이크는 https 주소에서만 동작합니다 (위 주소는 https).
 
